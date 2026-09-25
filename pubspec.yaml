@@ -1,5 +1,5 @@
 name: mobiwha
-description: "WhatsApp unsaved contact & message collector for business inquiries"
+description: "MobiWA - Local lead management and message recording application"
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -9,9 +9,6 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-
-  # Notification Listener (real-time WhatsApp capture)
-  flutter_notification_listener: ^1.4.0
 
   # Local SQLite database
   sqflite: ^2.3.3
@@ -42,6 +39,7 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
+  sqflite_common_ffi: ^2.3.3
 
 flutter:
   uses-material-design: true

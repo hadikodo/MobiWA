@@ -1,48 +1,50 @@
 // lib/utils/phone_utils.dart
 
 class PhoneUtils {
-  /// Normalizes a phone number to digits-only with country code for comparison.
-  /// E.g. "+1 (555) 123-4567" → "15551234567"
+  /// Normalizes a phone number to digits only (retaining '+' if present at the start)
   static String normalize(String raw) {
+    final trimmed = raw.trim();
+    final hasPlus = trimmed.startsWith('+');
+    final digits = trimmed.replaceAll(RegExp(r'[^\d]'), '');
+    if (digits.isEmpty) return '';
+    return hasPlus ? '+$digits' : digits;
+  }
+
+  /// Extracts digits only without symbols or plus sign
+  static String digitsOnly(String raw) {
     return raw.replaceAll(RegExp(r'[^\d]'), '');
   }
 
-  /// Checks if a string looks like a phone number (unsaved contact).
-  /// WhatsApp shows unsaved numbers as "+XXXXXXXXXXXX" in notification titles.
+  /// Checks if a string looks like a valid phone number
   static bool looksLikePhoneNumber(String input) {
     final trimmed = input.trim();
-    return RegExp(r'^\+?[\d\s\-().]{7,20}$').hasMatch(trimmed);
+    final digits = digitsOnly(trimmed);
+    return digits.length >= 7 && digits.length <= 16;
   }
 
-  /// Extracts a phone number from a WhatsApp JID string.
-  /// e.g. "15551234567@s.whatsapp.net" → "15551234567"
-  /// e.g. "1234567890-1234567890@g.us" → null (group, skip)
-  static String? extractFromJid(String jid) {
-    if (jid.contains('@g.us')) return null; // group chat
-    final parts = jid.split('@');
-    if (parts.isEmpty) return null;
-    final num = parts[0];
-    // Validate it's actually a number
-    if (RegExp(r'^\d{7,15}$').hasMatch(num)) return num;
-    return null;
+  /// Formats phone number for display if possible
+  static String formatForDisplay(String raw) {
+    final cleaned = raw.trim();
+    if (cleaned.isEmpty) return 'No Phone';
+    return cleaned;
   }
 
-  /// Returns all normalized variants of a phone number to match against contacts.
-  /// Handles missing/extra country codes.
-  static List<String> variants(String normalized) {
-    final results = <String>{normalized};
-    // Strip leading country codes to get local number variants
-    if (normalized.length > 10) {
-      results.add(normalized.substring(normalized.length - 10));
+  /// Generates comparison variants (e.g. with/without country code) to check against device contacts
+  static Set<String> getVariants(String phone) {
+    final digits = digitsOnly(phone);
+    if (digits.isEmpty) return {};
+
+    final set = <String>{digits};
+    // If it starts with country code or 0, strip them
+    if (digits.length > 10) {
+      set.add(digits.substring(digits.length - 10)); // last 10 digits
     }
-    if (normalized.length > 11) {
-      results.add(normalized.substring(normalized.length - 11));
+    if (digits.length > 9) {
+      set.add(digits.substring(digits.length - 9)); // last 9 digits
     }
-    // Add with common country code prefixes if short
-    if (normalized.length == 10) {
-      results.add('1$normalized'); // US/CA
-      results.add('44$normalized'); // UK (though UK is typically 11 digits)
+    if (digits.startsWith('0')) {
+      set.add(digits.replaceFirst(RegExp(r'^0+'), ''));
     }
-    return results.toList();
+    return set;
   }
 }

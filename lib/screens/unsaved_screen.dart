@@ -2,8 +2,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
+import '../models/lead.dart';
 import '../services/database_service.dart';
-import '../services/notification_service.dart';
+import '../services/contact_service.dart';
 import '../services/export_service.dart';
 import 'detail_screen.dart';
 
@@ -15,172 +16,274 @@ class UnsavedScreen extends StatefulWidget {
 }
 
 class _UnsavedScreenState extends State<UnsavedScreen> {
-  List<Map<String, dynamic>> _senders = [];
-  bool _loading = true;
+  List<Lead> _unsavedLeads = [];
+  bool _isLoading = true;
   String _searchQuery = '';
 
   @override
   void initState() {
     super.initState();
-    _load();
-    NotificationService.newLeads.listen((_) => _load());
+    _loadUnsavedLeads();
   }
 
-  Future<void> _load() async {
-    final senders = await DatabaseService.getUnsavedSenders();
+  Future<void> _loadUnsavedLeads() async {
+    setState(() => _isLoading = true);
+    final leads = await DatabaseService.getLeads(
+      onlyUnsaved: true,
+      query: _searchQuery.isNotEmpty ? _searchQuery : null,
+      limit: 1000,
+    );
     if (mounted) {
       setState(() {
-        _senders = senders;
-        _loading = false;
+        _unsavedLeads = leads;
+        _isLoading = false;
       });
     }
   }
 
-  List<Map<String, dynamic>> get _filtered {
-    if (_searchQuery.isEmpty) return _senders;
-    return _senders.where((s) =>
-      s['sender'].toString().contains(_searchQuery) ||
-      s['last_message'].toString().toLowerCase().contains(_searchQuery.toLowerCase())
-    ).toList();
+  Future<void> _handleSaveToContacts(Lead lead) async {
+    final success = await ContactService.saveToDeviceContacts(lead);
+    if (!mounted) return;
+
+    if (success) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Saved "${lead.displayName}" to device contacts.'),
+          backgroundColor: Colors.green.shade700,
+        ),
+      );
+      _loadUnsavedLeads();
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not save to contacts. Check permissions.'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final fmt = DateFormat('MMM d, h:mm a');
+
     return Scaffold(
       appBar: AppBar(
-        title: Text('Unsaved Contacts (${_senders.length})'),
+        title: Text('Unsaved Leads (${_unsavedLeads.length})'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.download_outlined),
+            icon: const Icon(Icons.download_rounded),
+            tooltip: 'Export Unsaved Leads (CSV)',
             onPressed: () async {
-              await ExportService.exportUnsavedToCSV();
+              final count = await ExportService.exportLeadsToCSV(onlyUnsaved: true);
+              if (!context.mounted) return;
+              if (count == 0) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('No unsaved leads found.')),
+                );
+              }
             },
-            tooltip: 'Export to CSV',
           ),
           IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _load,
+            icon: const Icon(Icons.refresh_rounded),
+            tooltip: 'Refresh',
+            onPressed: _loadUnsavedLeads,
           ),
         ],
       ),
       body: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: SearchBar(
-              hintText: 'Search phone or message...',
+              hintText: 'Search unsaved phone, name, notes...',
               leading: const Icon(Icons.search),
-              onChanged: (q) => setState(() => _searchQuery = q),
+              trailing: _searchQuery.isNotEmpty
+                  ? [
+                      IconButton(
+                        icon: const Icon(Icons.clear),
+                        onPressed: () {
+                          setState(() => _searchQuery = '');
+                          _loadUnsavedLeads();
+                        },
+                      ),
+                    ]
+                  : null,
+              onChanged: (q) {
+                _searchQuery = q;
+                _loadUnsavedLeads();
+              },
             ),
           ),
           Expanded(
-            child: _loading
+            child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
-                : _filtered.isEmpty
-                    ? _EmptyState(hasSearch: _searchQuery.isNotEmpty)
+                : _unsavedLeads.isEmpty
+                    ? Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(32),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.check_circle_outline_rounded,
+                                  size: 64, color: Colors.green.shade300),
+                              const SizedBox(height: 16),
+                              Text(
+                                _searchQuery.isNotEmpty
+                                    ? 'No matching unsaved leads found'
+                                    : 'All leads are saved in contacts!',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.grey.shade700,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                _searchQuery.isNotEmpty
+                                    ? 'Try adjusting your search criteria.'
+                                    : 'When new leads with unrecognized phone numbers are recorded, they will show up here.',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                    fontSize: 13, color: Colors.grey.shade500),
+                              ),
+                            ],
+                          ),
+                        ),
+                      )
                     : RefreshIndicator(
-                        onRefresh: _load,
+                        onRefresh: _loadUnsavedLeads,
                         child: ListView.separated(
-                          itemCount: _filtered.length,
-                          separatorBuilder: (_, __) => const Divider(height: 1),
-                          itemBuilder: (context, i) {
-                            final s = _filtered[i];
-                            return _UnsavedTile(sender: s, onRefresh: _load);
+                          padding: const EdgeInsets.all(16),
+                          itemCount: _unsavedLeads.length,
+                          separatorBuilder: (_, __) =>
+                              const SizedBox(height: 10),
+                          itemBuilder: (ctx, i) {
+                            final lead = _unsavedLeads[i];
+                            return Card(
+                              child: InkWell(
+                                onTap: () async {
+                                  await Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) =>
+                                          DetailScreen(leadId: lead.id!),
+                                    ),
+                                  );
+                                  _loadUnsavedLeads();
+                                },
+                                borderRadius: BorderRadius.circular(14),
+                                child: Padding(
+                                  padding: const EdgeInsets.all(14),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  lead.displayName,
+                                                  style: const TextStyle(
+                                                    fontWeight: FontWeight.bold,
+                                                    fontSize: 15,
+                                                  ),
+                                                ),
+                                                if (lead.name.isNotEmpty)
+                                                  Text(
+                                                    lead.phoneNumber,
+                                                    style: TextStyle(
+                                                      fontSize: 12,
+                                                      color:
+                                                          Colors.grey.shade600,
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
+                                          ),
+                                          IconButton(
+                                            icon: const Icon(Icons.copy,
+                                                size: 18),
+                                            tooltip: 'Copy Number',
+                                            onPressed: () async {
+                                              await Clipboard.setData(
+                                                  ClipboardData(
+                                                      text: lead.phoneNumber));
+                                              if (context.mounted) {
+                                                ScaffoldMessenger.of(context)
+                                                    .showSnackBar(
+                                                  SnackBar(
+                                                    content: Text(
+                                                        'Copied: ${lead.phoneNumber}'),
+                                                    duration: const Duration(
+                                                        seconds: 2),
+                                                  ),
+                                                );
+                                              }
+                                            },
+                                          ),
+                                        ],
+                                      ),
+                                      if (lead.notes.isNotEmpty) ...[
+                                        const SizedBox(height: 6),
+                                        Text(
+                                          lead.notes,
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                            fontSize: 13,
+                                            color: Colors.grey.shade700,
+                                          ),
+                                        ),
+                                      ],
+                                      const SizedBox(height: 12),
+                                      Row(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          Text(
+                                            'Updated ${fmt.format(lead.updatedDateTime)}',
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              color: Colors.grey.shade500,
+                                            ),
+                                          ),
+                                          OutlinedButton.icon(
+                                            style: OutlinedButton.styleFrom(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                      horizontal: 10,
+                                                      vertical: 4),
+                                              minimumSize: Size.zero,
+                                              tapTargetSize:
+                                                  MaterialTapTargetSize
+                                                      .shrinkWrap,
+                                            ),
+                                            onPressed: () =>
+                                                _handleSaveToContacts(lead),
+                                            icon: const Icon(
+                                                Icons.person_add_rounded,
+                                                size: 15),
+                                            label: const Text('Save to Contacts',
+                                                style: TextStyle(fontSize: 12)),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            );
                           },
                         ),
                       ),
           ),
-        ],
-      ),
-    );
-  }
-}
-
-class _UnsavedTile extends StatelessWidget {
-  final Map<String, dynamic> sender;
-  final VoidCallback onRefresh;
-
-  const _UnsavedTile({required this.sender, required this.onRefresh});
-
-  @override
-  Widget build(BuildContext context) {
-    final phone = sender['sender'] as String;
-    final count = sender['message_count'] as int;
-    final lastSeen = DateTime.fromMillisecondsSinceEpoch(sender['last_seen'] as int);
-    final lastMsg = sender['last_message'] as String;
-    final fmt = DateFormat('MMM d, h:mm a');
-
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      leading: CircleAvatar(
-        backgroundColor: Colors.orange.shade100,
-        child: Icon(Icons.person_off, color: Colors.orange.shade700),
-      ),
-      title: Text(phone, style: const TextStyle(fontWeight: FontWeight.bold)),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(lastMsg, maxLines: 1, overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 13)),
-          const SizedBox(height: 2),
-          Row(
-            children: [
-              Icon(Icons.chat_bubble_outline, size: 12, color: Colors.grey.shade500),
-              const SizedBox(width: 4),
-              Text('$count messages', style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
-              const SizedBox(width: 8),
-              Icon(Icons.access_time, size: 12, color: Colors.grey.shade500),
-              const SizedBox(width: 4),
-              Text(fmt.format(lastSeen), style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
-            ],
-          ),
-        ],
-      ),
-      trailing: PopupMenuButton<String>(
-        onSelected: (action) async {
-          if (action == 'copy') {
-            await Clipboard.setData(ClipboardData(text: phone));
-            if (context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Copied: $phone'), duration: const Duration(seconds: 2)));
-            }
-          }
-        },
-        itemBuilder: (_) => [
-          const PopupMenuItem(value: 'copy', child: ListTile(
-            leading: Icon(Icons.copy), title: Text('Copy Number'))),
-        ],
-      ),
-      onTap: () => Navigator.push(context,
-          MaterialPageRoute(builder: (_) => DetailScreen(sender: phone))),
-    );
-  }
-}
-
-class _EmptyState extends StatelessWidget {
-  final bool hasSearch;
-  const _EmptyState({required this.hasSearch});
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.person_search, size: 64, color: Colors.grey.shade300),
-          const SizedBox(height: 16),
-          Text(
-            hasSearch ? 'No results found' : 'No unsaved contacts yet',
-            style: TextStyle(color: Colors.grey.shade500, fontSize: 16),
-          ),
-          if (!hasSearch) ...[
-            const SizedBox(height: 8),
-            Text(
-              'Unsaved WhatsApp senders will appear here\nautomatically as messages arrive',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.grey.shade400, fontSize: 13),
-            ),
-          ],
         ],
       ),
     );

@@ -2,57 +2,95 @@
 
 class Lead {
   final int? id;
-  final String sender;       // Phone number or name from notification
-  final String message;      // Message body
-  final int timestamp;       // Unix ms
-  final bool isUnsaved;      // True if sender not in device contacts
-  final bool isGroup;        // True if from a group chat
-  final String source;       // 'notification' | 'backup'
-  final String packageName;  // com.whatsapp or com.whatsapp.w4b
+  final String phoneNumber;
+  final String name;
+  final String notes;
+  final String status; // 'New', 'Contacted', 'Qualified', 'Converted', 'Archived'
+  final bool isUnsaved;
+  final String tags;
+  final int createdAt;
+  final int updatedAt;
+  final int messageCount;
+  final String? lastMessage;
+  final int? lastMessageTime;
 
   Lead({
     this.id,
-    required this.sender,
-    required this.message,
-    required this.timestamp,
-    this.isUnsaved = false,
-    this.isGroup = false,
-    this.source = 'notification',
-    this.packageName = 'com.whatsapp',
+    required this.phoneNumber,
+    this.name = '',
+    this.notes = '',
+    this.status = 'New',
+    this.isUnsaved = true,
+    this.tags = '',
+    required this.createdAt,
+    required this.updatedAt,
+    this.messageCount = 0,
+    this.lastMessage,
+    this.lastMessageTime,
   });
 
-  DateTime get dateTime => DateTime.fromMillisecondsSinceEpoch(timestamp);
+  DateTime get createdDateTime =>
+      DateTime.fromMillisecondsSinceEpoch(createdAt);
+  DateTime get updatedDateTime =>
+      DateTime.fromMillisecondsSinceEpoch(updatedAt);
+  DateTime? get lastMessageDateTime => lastMessageTime != null
+      ? DateTime.fromMillisecondsSinceEpoch(lastMessageTime!)
+      : null;
+
+  String get displayName => name.trim().isNotEmpty ? name.trim() : phoneNumber;
 
   Map<String, dynamic> toMap() => {
-    'id': id,
-    'sender': sender,
-    'message': message,
-    'timestamp': timestamp,
+    if (id != null) 'id': id,
+    'phone_number': phoneNumber,
+    'name': name,
+    'notes': notes,
+    'status': status,
     'is_unsaved': isUnsaved ? 1 : 0,
-    'is_group': isGroup ? 1 : 0,
-    'source': source,
-    'package_name': packageName,
+    'tags': tags,
+    'created_at': createdAt,
+    'updated_at': updatedAt,
   };
 
-  factory Lead.fromMap(Map<String, dynamic> m) => Lead(
-    id: m['id'] as int?,
-    sender: m['sender'] as String,
-    message: m['message'] as String,
-    timestamp: m['timestamp'] as int,
-    isUnsaved: (m['is_unsaved'] as int) == 1,
-    isGroup: (m['is_group'] as int) == 1,
-    source: m['source'] as String? ?? 'notification',
-    packageName: m['package_name'] as String? ?? 'com.whatsapp',
+  factory Lead.fromMap(Map<String, dynamic> map) => Lead(
+    id: map['id'] as int?,
+    phoneNumber: (map['phone_number'] ?? map['sender'] ?? '') as String,
+    name: map['name'] as String? ?? '',
+    notes: map['notes'] as String? ?? '',
+    status: map['status'] as String? ?? 'New',
+    isUnsaved: ((map['is_unsaved'] as int?) ?? 1) == 1,
+    tags: map['tags'] as String? ?? '',
+    createdAt: (map['created_at'] ?? map['timestamp'] ?? 0) as int,
+    updatedAt: (map['updated_at'] ?? map['timestamp'] ?? 0) as int,
+    messageCount: (map['message_count'] as int?) ?? 0,
+    lastMessage: map['last_message'] as String?,
+    lastMessageTime: map['last_message_time'] as int?,
   );
 
-  Lead copyWith({bool? isUnsaved}) => Lead(
-    id: id,
-    sender: sender,
-    message: message,
-    timestamp: timestamp,
+  Lead copyWith({
+    int? id,
+    String? phoneNumber,
+    String? name,
+    String? notes,
+    String? status,
+    bool? isUnsaved,
+    String? tags,
+    int? createdAt,
+    int? updatedAt,
+    int? messageCount,
+    String? lastMessage,
+    int? lastMessageTime,
+  }) => Lead(
+    id: id ?? this.id,
+    phoneNumber: phoneNumber ?? this.phoneNumber,
+    name: name ?? this.name,
+    notes: notes ?? this.notes,
+    status: status ?? this.status,
     isUnsaved: isUnsaved ?? this.isUnsaved,
-    isGroup: isGroup,
-    source: source,
-    packageName: packageName,
+    tags: tags ?? this.tags,
+    createdAt: createdAt ?? this.createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+    messageCount: messageCount ?? this.messageCount,
+    lastMessage: lastMessage ?? this.lastMessage,
+    lastMessageTime: lastMessageTime ?? this.lastMessageTime,
   );
 }
