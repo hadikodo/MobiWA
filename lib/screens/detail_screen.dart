@@ -7,6 +7,8 @@ import '../models/lead_message.dart';
 import '../services/database_service.dart';
 import '../services/contact_service.dart';
 import '../services/export_service.dart';
+import '../services/whatsapp_service.dart';
+import '../services/gemini_service.dart';
 
 class DetailScreen extends StatefulWidget {
   final int leadId;
@@ -16,7 +18,8 @@ class DetailScreen extends StatefulWidget {
   State<DetailScreen> createState() => _DetailScreenState();
 }
 
-class _DetailScreenState extends State<DetailScreen> {
+class _DetailScreenState extends State<DetailScreen>
+    with WidgetsBindingObserver {
   Lead? _lead;
   List<LeadMessage> _messages = [];
   bool _isLoading = true;
@@ -25,6 +28,8 @@ class _DetailScreenState extends State<DetailScreen> {
   late TextEditingController _notesController;
   late TextEditingController _tagsController;
   String _currentStatus = 'New';
+  _PendingOutgoingMessage? _pendingOutgoingMessage;
+  bool _confirmingReturnedMessage = false;
 
   final List<String> _statuses = [
     'New',
@@ -37,6 +42,8 @@ class _DetailScreenState extends State<DetailScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    DatabaseService.dataRevision.addListener(_handleDataChanged);
     _nameController = TextEditingController();
     _notesController = TextEditingController();
     _tagsController = TextEditingController();
@@ -45,13 +52,74 @@ class _DetailScreenState extends State<DetailScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    DatabaseService.dataRevision.removeListener(_handleDataChanged);
     _nameController.dispose();
     _notesController.dispose();
     _tagsController.dispose();
     super.dispose();
   }
 
-  Future<void> _loadLeadData() async {
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _confirmReturnedOutgoingMessage();
+    }
+  }
+
+  Future<void> _confirmReturnedOutgoingMessage() async {
+    final pending = _pendingOutgoingMessage;
+    if (pending == null || _confirmingReturnedMessage || !mounted) return;
+    _pendingOutgoingMessage = null;
+    _confirmingReturnedMessage = true;
+    await Future<void>.delayed(const Duration(milliseconds: 350));
+    if (!mounted) return;
+    final sent = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Did you send this message?'),
+        content: const Text(
+          'MobiWA cannot verify delivery in WhatsApp. Confirm only if you tapped Send; then the message will be added to this lead’s history.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Not sent'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Yes, save to history'),
+          ),
+        ],
+      ),
+    );
+    if (sent == true && mounted) {
+      await DatabaseService.insertMessage(
+        LeadMessage(
+          leadId: widget.leadId,
+          phoneNumber: pending.phoneNumber,
+          message: pending.message,
+          direction: 'outgoing',
+          timestamp: DateTime.now().millisecondsSinceEpoch,
+          note: 'Sent via WhatsApp (user confirmed)',
+        ),
+      );
+      await _loadLeadData();
+    }
+    _confirmingReturnedMessage = false;
+  }
+
+  void _handleDataChanged() {
+    final lead = _lead;
+    final preserveEdits = lead != null &&
+        (_nameController.text != lead.name ||
+            _notesController.text != lead.notes ||
+            _tagsController.text != lead.tags ||
+            _currentStatus != lead.status);
+    _loadLeadData(preserveEdits: preserveEdits);
+  }
+
+  Future<void> _loadLeadData({bool preserveEdits = false}) async {
     setState(() => _isLoading = true);
     final lead = await DatabaseService.getLeadById(widget.leadId);
     if (lead != null) {
@@ -60,9 +128,11 @@ class _DetailScreenState extends State<DetailScreen> {
         setState(() {
           _lead = lead;
           _messages = messages;
-          _nameController.text = lead.name;
-          _notesController.text = lead.notes;
-          _tagsController.text = lead.tags;
+          if (!preserveEdits) {
+            _nameController.text = lead.name;
+            _notesController.text = lead.notes;
+            _tagsController.text = lead.tags;
+          }
           _currentStatus = lead.status;
           _isLoading = false;
         });
@@ -90,6 +160,231 @@ class _DetailScreenState extends State<DetailScreen> {
         ),
       );
     }
+  }
+
+  Future<void> _analyzeChatWithGemini() async {
+    if (_lead == null) return;
+
+    final isConfigured = await GeminiService.isConfigured();
+    if (!isConfigured) {
+      final configured = await _showGeminiApiKeyDialog();
+      if (!configured || !mounted) return;
+    }
+
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => const Center(
+        child: Card(
+          child: Padding(
+            padding: EdgeInsets.all(24),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(strokeWidth: 2),
+                SizedBox(width: 16),
+                Text('Mobi AI analyzing customer chat...'),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    try {
+      var currentMessages = List<LeadMessage>.from(_messages);
+
+      // If no messages recorded in DB, auto-scrape live from WhatsApp
+      if (currentMessages.isEmpty) {
+        final hasA11y = await WhatsAppService.hasAccessibilityAccess();
+        if (hasA11y) {
+          final scraped = await WhatsAppService.scrapeChatMessages(
+            phoneNumber: _lead!.phoneNumber,
+          );
+          if (scraped.isNotEmpty) {
+            for (final item in scraped) {
+              final text = item['message'] ?? '';
+              final dir = item['direction'] ?? 'incoming';
+              final ts = int.tryParse(item['timestamp'] ?? '') ??
+                  DateTime.now().millisecondsSinceEpoch;
+              if (text.isNotEmpty) {
+                await DatabaseService.insertMessage(
+                  LeadMessage(
+                    leadId: _lead!.id!,
+                    phoneNumber: _lead!.phoneNumber,
+                    message: text,
+                    direction: dir,
+                    timestamp: ts,
+                    note: 'Live Scraped via WhatsApp Accessibility',
+                  ),
+                );
+              }
+            }
+            await _loadLeadData();
+            currentMessages = await DatabaseService.getMessagesForLead(_lead!.id!);
+          }
+        }
+      }
+
+      final result = await GeminiService.analyzeLeadChat(
+        lead: _lead!,
+        messages: currentMessages,
+      );
+
+      if (!mounted) return;
+      Navigator.pop(context); // Dismiss loading
+
+      if (result == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Mobi AI could not analyze this chat.')),
+        );
+        return;
+      }
+
+      // Show confirmation dialog with AI findings
+      final apply = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.auto_awesome, color: Colors.indigo),
+              SizedBox(width: 8),
+              Text('Mobi AI Insights'),
+            ],
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (result.suggestedName.isNotEmpty) ...[
+                  const Text('Detected Name:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                  Text(result.suggestedName),
+                  const SizedBox(height: 10),
+                ],
+                const Text('Stage:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                Text(result.status),
+                const SizedBox(height: 10),
+                const Text('Detected Interest & Requirements:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                Text(result.interestSummary.isNotEmpty ? result.interestSummary : 'General inquiry'),
+                const SizedBox(height: 10),
+                if (result.lastPurchasedOrRequestedItem.isNotEmpty) ...[
+                  const Text('Item Requested / Bought:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                  Text(result.lastPurchasedOrRequestedItem),
+                  const SizedBox(height: 10),
+                ],
+                const Text('Categorical Tags:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 4,
+                  children: result.tags
+                      .map((t) => Chip(
+                            label: Text('#$t', style: const TextStyle(fontSize: 11)),
+                            backgroundColor: Colors.indigo.shade50,
+                            padding: EdgeInsets.zero,
+                          ))
+                      .toList(),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Discard'),
+            ),
+            FilledButton.icon(
+              style: FilledButton.styleFrom(backgroundColor: Colors.indigo.shade700),
+              onPressed: () => Navigator.pop(ctx, true),
+              icon: const Icon(Icons.check, size: 16),
+              label: const Text('Apply AI Profile'),
+            ),
+          ],
+        ),
+      );
+
+      if (apply == true && mounted) {
+        await GeminiService.applyAnalysisToLead(_lead!, result);
+        await _loadLeadData();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('Mobi AI profile applied to lead!'),
+              backgroundColor: Colors.indigo.shade700,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.pop(context); // Dismiss loading
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('AI analysis failed: $e'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<bool> _showGeminiApiKeyDialog() async {
+    final keyController = TextEditingController();
+    final existing = await GeminiService.getApiKey();
+    if (!mounted) return false;
+    if (existing != null) keyController.text = existing;
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.auto_awesome, color: Colors.indigo),
+            SizedBox(width: 8),
+            Text('Mobi AI Settings'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Configure your AI engine key to enable smart chat analysis, customer interest profiling, and list categorization.',
+              style: TextStyle(fontSize: 13),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: keyController,
+              obscureText: true,
+              decoration: const InputDecoration(
+                labelText: 'Mobi AI Engine Key',
+                hintText: 'Paste API Key...',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.indigo.shade700),
+            onPressed: () async {
+              final key = keyController.text.trim();
+              if (key.isNotEmpty) {
+                await GeminiService.saveApiKey(key);
+                if (ctx.mounted) Navigator.pop(ctx, true);
+              }
+            },
+            child: const Text('Save Key'),
+          ),
+        ],
+      ),
+    );
+    return saved ?? false;
   }
 
   Future<void> _handleSaveToContacts() async {
@@ -238,6 +533,111 @@ class _DetailScreenState extends State<DetailScreen> {
     );
   }
 
+  Future<void> _showWhatsAppComposer() async {
+    if (_lead == null) return;
+    if (!_lead!.whatsappOptIn) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Record recipient opt-in first'),
+          content: const Text(
+            'Only prepare a WhatsApp message after the recipient has agreed to receive messages. Record their consent on this lead first.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Record opt-in'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+      await DatabaseService.setWhatsAppOptIn(widget.leadId, true);
+      await _loadLeadData();
+      if (!mounted) return;
+    }
+    final messageController = TextEditingController();
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.fromLTRB(
+          20,
+          24,
+          20,
+          MediaQuery.of(ctx).viewInsets.bottom + 24,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Prepare WhatsApp message',
+                style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 8),
+            Text('To ${_lead!.displayName} • ${_lead!.phoneNumber}'),
+            const SizedBox(height: 12),
+            TextField(
+              controller: messageController,
+              autofocus: true,
+              maxLines: 5,
+              decoration: const InputDecoration(
+                labelText: 'Message draft',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'WhatsApp will open with this draft. Review it and tap Send in WhatsApp. MobiWA does not send or mark it sent automatically.',
+              style: TextStyle(fontSize: 12),
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                icon: const Icon(Icons.open_in_new),
+                label: const Text('Open WhatsApp'),
+                onPressed: () async {
+                  try {
+                    final message = messageController.text.trim();
+                    if (message.isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Enter a message draft first.')),
+                      );
+                      return;
+                    }
+                    _pendingOutgoingMessage = _PendingOutgoingMessage(
+                      phoneNumber: _lead!.phoneNumber,
+                      message: message,
+                    );
+                    await WhatsAppService.openChat(
+                      phoneNumber: _lead!.phoneNumber,
+                      message: message,
+                    );
+                    if (ctx.mounted) Navigator.pop(ctx);
+                  } on PlatformException catch (error) {
+                    _pendingOutgoingMessage = null;
+                    if (ctx.mounted) {
+                      ScaffoldMessenger.of(ctx).showSnackBar(
+                        SnackBar(
+                            content: Text(
+                                error.message ?? 'Could not open WhatsApp.')),
+                      );
+                    }
+                  }
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    messageController.dispose();
+  }
+
   Future<void> _handleDeleteLead() async {
     final confirm = await showDialog<bool>(
       context: context,
@@ -291,7 +691,8 @@ class _DetailScreenState extends State<DetailScreen> {
           IconButton(
             icon: const Icon(Icons.share_outlined),
             tooltip: 'Export Transcript (CSV)',
-            onPressed: () => ExportService.exportLeadConversation(widget.leadId),
+            onPressed: () =>
+                ExportService.exportLeadConversation(widget.leadId),
           ),
           IconButton(
             icon: const Icon(Icons.delete_outline, color: Colors.red),
@@ -301,6 +702,7 @@ class _DetailScreenState extends State<DetailScreen> {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
+        heroTag: 'detail_fab',
         onPressed: _showAddMessageDialog,
         icon: const Icon(Icons.chat_bubble_outline),
         label: const Text('Log Message'),
@@ -375,6 +777,30 @@ class _DetailScreenState extends State<DetailScreen> {
                       ],
                     ),
 
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                        onPressed: _showWhatsAppComposer,
+                        icon: const Icon(Icons.chat_rounded),
+                        label: const Text('Prepare WhatsApp Message'),
+                      ),
+                    ),
+                    SwitchListTile.adaptive(
+                      contentPadding: EdgeInsets.zero,
+                      value: _lead!.whatsappOptIn,
+                      title: const Text('Recipient has opted in'),
+                      subtitle: const Text(
+                        'Enable only after recording their permission to receive WhatsApp messages. Turn off on opt-out.',
+                      ),
+                      onChanged: (value) async {
+                        await DatabaseService.setWhatsAppOptIn(
+                          widget.leadId,
+                          value,
+                        );
+                      },
+                    ),
+
                     // Unsaved Warning & Action
                     if (_lead!.isUnsaved) ...[
                       const SizedBox(height: 12),
@@ -405,8 +831,7 @@ class _DetailScreenState extends State<DetailScreen> {
                               style: TextButton.styleFrom(
                                 padding: EdgeInsets.zero,
                                 minimumSize: Size.zero,
-                                tapTargetSize:
-                                    MaterialTapTargetSize.shrinkWrap,
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                               ),
                               onPressed: _handleSaveToContacts,
                               icon: const Icon(Icons.add, size: 16),
@@ -440,7 +865,8 @@ class _DetailScreenState extends State<DetailScreen> {
                         border: OutlineInputBorder(),
                       ),
                       items: _statuses
-                          .map((s) => DropdownMenuItem(value: s, child: Text(s)))
+                          .map(
+                              (s) => DropdownMenuItem(value: s, child: Text(s)))
                           .toList(),
                       onChanged: (val) {
                         if (val != null) setState(() => _currentStatus = val);
@@ -461,18 +887,30 @@ class _DetailScreenState extends State<DetailScreen> {
                       maxLines: 3,
                       decoration: const InputDecoration(
                         labelText: 'Inquiry Notes & Requirements',
-                        hintText: 'Customer requested quotation for 500 units...',
+                        hintText:
+                            'Customer requested quotation for 500 units...',
                         border: OutlineInputBorder(),
                       ),
                     ),
                     const SizedBox(height: 12),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: ElevatedButton.icon(
-                        onPressed: _saveLeadInfo,
-                        icon: const Icon(Icons.save_outlined, size: 18),
-                        label: const Text('Update Lead Info'),
-                      ),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        OutlinedButton.icon(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.indigo.shade700,
+                            side: BorderSide(color: Colors.indigo.shade200),
+                          ),
+                          onPressed: _analyzeChatWithGemini,
+                          icon: const Icon(Icons.auto_awesome, size: 16),
+                          label: const Text('Mobi AI Analyze'),
+                        ),
+                        ElevatedButton.icon(
+                          onPressed: _saveLeadInfo,
+                          icon: const Icon(Icons.save_outlined, size: 18),
+                          label: const Text('Update Lead Info'),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -565,7 +1003,8 @@ class _DetailScreenState extends State<DetailScreen> {
                                     ? Icons.call_made_rounded
                                     : Icons.call_received_rounded,
                                 size: 13,
-                                color: isOutgoing ? Colors.teal : Colors.blueGrey,
+                                color:
+                                    isOutgoing ? Colors.teal : Colors.blueGrey,
                               ),
                               const SizedBox(width: 4),
                               Text(
@@ -625,4 +1064,14 @@ class _DetailScreenState extends State<DetailScreen> {
       ),
     );
   }
+}
+
+class _PendingOutgoingMessage {
+  const _PendingOutgoingMessage({
+    required this.phoneNumber,
+    required this.message,
+  });
+
+  final String phoneNumber;
+  final String message;
 }

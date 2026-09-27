@@ -66,6 +66,50 @@ class ExportService {
     return leads.length;
   }
 
+  static Future<int> exportAllMessagesToCSV() async {
+    final messages = await DatabaseService.getAllMessagesForExport();
+    if (messages.isEmpty) return 0;
+
+    final rows = <List<dynamic>>[
+      [
+        'Message ID',
+        'Contact Name',
+        'Phone Number',
+        'Direction',
+        'Date & Time',
+        'Message',
+        'Note',
+        'Source Key',
+      ],
+    ];
+    for (final message in messages) {
+      final timestamp = message['timestamp'] as int? ?? 0;
+      rows.add([
+        message['id'] ?? '',
+        message['lead_name'] ?? '',
+        message['phone_number'] ?? '',
+        (message['direction']?.toString() ?? '').toUpperCase(),
+        timestamp > 0
+            ? _fmt.format(DateTime.fromMillisecondsSinceEpoch(timestamp))
+            : '',
+        message['message'] ?? '',
+        message['note'] ?? '',
+        message['source_key'] ?? '',
+      ]);
+    }
+
+    final csvData = const ListToCsvConverter().convert(rows);
+    final dir = await getTemporaryDirectory();
+    final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
+    final file = File('${dir.path}/mobiwa_messages_$timestamp.csv');
+    await file.writeAsString('\uFEFF$csvData');
+    await Share.shareXFiles(
+      [XFile(file.path, mimeType: 'text/csv')],
+      subject: 'MobiWA Message Export (${messages.length} records)',
+    );
+    return messages.length;
+  }
+
   /// Export a single lead and all its message history
   static Future<bool> exportLeadConversation(int leadId) async {
     final lead = await DatabaseService.getLeadById(leadId);
@@ -130,14 +174,18 @@ class ExportService {
         final status = row.length > 2 ? row[2].toString().trim() : 'New';
         final notes = row.length > 3 ? row[3].toString().trim() : '';
 
+        final alreadyExists =
+            await DatabaseService.getLeadByPhone(phone) != null;
         await DatabaseService.getOrCreateLead(
           phoneNumber: phone,
           name: name,
           notes: notes,
           status: status.isNotEmpty ? status : 'New',
+          notify: false,
         );
-        imported++;
+        if (!alreadyExists) imported++;
       }
+      if (imported > 0) DatabaseService.notifyDataChanged();
       return imported;
     } catch (_) {
       return 0;

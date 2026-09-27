@@ -4,6 +4,11 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+dependencies {
+    // Parses MessagingStyle notifications on the full Android 8+ minSdk range.
+    implementation("androidx.core:core:1.13.1")
+}
+
 android {
     namespace = "com.mobiwha.mobiwha"
     compileSdk = flutter.compileSdkVersion

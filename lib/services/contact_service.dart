@@ -12,6 +12,11 @@ class ContactService {
   static DateTime? get lastSyncTime => _lastSyncTime;
   static int get cachedCount => _contactsMap.length;
 
+  static void clearInMemoryCache() {
+    _contactsMap = {};
+    _lastSyncTime = null;
+  }
+
   /// Check if contacts permission is currently granted
   static Future<bool> hasPermission() async {
     final status = await Permission.contacts.status;
@@ -40,13 +45,11 @@ class ContactService {
       for (final contact in contacts) {
         final name = contact.displayName.trim();
         for (final phone in contact.phones) {
-          final digits = PhoneUtils.digitsOnly(phone.number);
-          if (digits.isNotEmpty) {
-            map[digits] = name;
-            for (final variant in PhoneUtils.getVariants(digits)) {
-              map[variant] = name;
-            }
-          }
+          final normalizedPhone = phone.normalizedNumber.trim();
+          final digits = PhoneUtils.digitsOnly(
+            normalizedPhone.isEmpty ? phone.number : normalizedPhone,
+          );
+          if (PhoneUtils.looksLikePhoneNumber(digits)) map[digits] = name;
         }
       }
 
@@ -72,7 +75,8 @@ class ContactService {
         }
 
         final isUnsaved = !found;
-        if (lead.isUnsaved != isUnsaved || (found && lead.name.isEmpty && contactName.isNotEmpty)) {
+        if (lead.isUnsaved != isUnsaved ||
+            (found && lead.name.isEmpty && contactName.isNotEmpty)) {
           await DatabaseService.updateLeadClassification(
             lead.id!,
             isUnsaved,
@@ -81,8 +85,48 @@ class ContactService {
         }
       }
 
+      DatabaseService.notifyDataChanged();
       return contacts.length;
     } catch (e) {
+      return -1;
+    }
+  }
+
+  /// Copies device contact phone numbers into the local lead directory.
+  /// Returns the number of newly created lead records, or -1 on failure.
+  static Future<int> importDeviceContactsAsLeads() async {
+    if (!await hasPermission()) {
+      final granted = await requestPermission();
+      if (!granted) return -1;
+    }
+
+    try {
+      final contacts = await FlutterContacts.getContacts(withProperties: true);
+      var imported = 0;
+      final seenPhones = <String>{};
+      for (final contact in contacts) {
+        final name = contact.displayName.trim();
+        for (final phoneEntry in contact.phones) {
+          final normalizedPhone = phoneEntry.normalizedNumber.trim();
+          final phone = PhoneUtils.normalize(
+              normalizedPhone.isEmpty ? phoneEntry.number : normalizedPhone);
+          if (!PhoneUtils.looksLikePhoneNumber(phone) ||
+              !seenPhones.add(phone)) {
+            continue;
+          }
+          if (await DatabaseService.getLeadByPhone(phone) != null) continue;
+          await DatabaseService.getOrCreateLead(
+            phoneNumber: phone,
+            name: name,
+            isUnsaved: false,
+            notify: false,
+          );
+          imported++;
+        }
+      }
+      if (imported > 0) DatabaseService.notifyDataChanged();
+      return imported;
+    } catch (_) {
       return -1;
     }
   }
@@ -110,7 +154,8 @@ class ContactService {
 
     try {
       final newContact = Contact()
-        ..name.first = lead.name.isNotEmpty ? lead.name : 'Lead ${lead.phoneNumber}'
+        ..name.first =
+            lead.name.isNotEmpty ? lead.name : 'Lead ${lead.phoneNumber}'
         ..phones = [Phone(lead.phoneNumber)];
 
       if (lead.notes.isNotEmpty) {

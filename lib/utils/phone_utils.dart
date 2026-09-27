@@ -19,7 +19,7 @@ class PhoneUtils {
   static bool looksLikePhoneNumber(String input) {
     final trimmed = input.trim();
     final digits = digitsOnly(trimmed);
-    return digits.length >= 7 && digits.length <= 16;
+    return digits.length >= 7 && digits.length <= 15;
   }
 
   /// Formats phone number for display if possible
@@ -29,22 +29,14 @@ class PhoneUtils {
     return cleaned;
   }
 
-  /// Generates comparison variants (e.g. with/without country code) to check against device contacts
+  /// Returns only lossless comparison forms for a phone number.
+  ///
+  /// Removing arbitrary trailing digits can incorrectly merge unrelated
+  /// international numbers. Country-code conversion needs an explicit region
+  /// and is deliberately not guessed here.
   static Set<String> getVariants(String phone) {
     final digits = digitsOnly(phone);
     if (digits.isEmpty) return {};
-
-    final set = <String>{digits};
-    // If it starts with country code or 0, strip them
-    if (digits.length > 10) {
-      set.add(digits.substring(digits.length - 10)); // last 10 digits
-    }
-    if (digits.length > 9) {
-      set.add(digits.substring(digits.length - 9)); // last 9 digits
-    }
-    if (digits.startsWith('0')) {
-      set.add(digits.replaceFirst(RegExp(r'^0+'), ''));
-    }
-    return set;
+    return {digits};
   }
 }

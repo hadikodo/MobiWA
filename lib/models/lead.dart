@@ -5,11 +5,14 @@ class Lead {
   final String phoneNumber;
   final String name;
   final String notes;
-  final String status; // 'New', 'Contacted', 'Qualified', 'Converted', 'Archived'
+  final String
+      status; // 'New', 'Contacted', 'Qualified', 'Converted', 'Archived'
   final bool isUnsaved;
   final String tags;
   final int createdAt;
   final int updatedAt;
+  final bool whatsappOptIn;
+  final int? whatsappConsentUpdatedAt;
   final int messageCount;
   final String? lastMessage;
   final int? lastMessageTime;
@@ -24,6 +27,8 @@ class Lead {
     this.tags = '',
     required this.createdAt,
     required this.updatedAt,
+    this.whatsappOptIn = false,
+    this.whatsappConsentUpdatedAt,
     this.messageCount = 0,
     this.lastMessage,
     this.lastMessageTime,
@@ -40,31 +45,35 @@ class Lead {
   String get displayName => name.trim().isNotEmpty ? name.trim() : phoneNumber;
 
   Map<String, dynamic> toMap() => {
-    if (id != null) 'id': id,
-    'phone_number': phoneNumber,
-    'name': name,
-    'notes': notes,
-    'status': status,
-    'is_unsaved': isUnsaved ? 1 : 0,
-    'tags': tags,
-    'created_at': createdAt,
-    'updated_at': updatedAt,
-  };
+        if (id != null) 'id': id,
+        'phone_number': phoneNumber,
+        'name': name,
+        'notes': notes,
+        'status': status,
+        'is_unsaved': isUnsaved ? 1 : 0,
+        'tags': tags,
+        'created_at': createdAt,
+        'updated_at': updatedAt,
+        'whatsapp_opt_in': whatsappOptIn ? 1 : 0,
+        'whatsapp_consent_updated_at': whatsappConsentUpdatedAt,
+      };
 
   factory Lead.fromMap(Map<String, dynamic> map) => Lead(
-    id: map['id'] as int?,
-    phoneNumber: (map['phone_number'] ?? map['sender'] ?? '') as String,
-    name: map['name'] as String? ?? '',
-    notes: map['notes'] as String? ?? '',
-    status: map['status'] as String? ?? 'New',
-    isUnsaved: ((map['is_unsaved'] as int?) ?? 1) == 1,
-    tags: map['tags'] as String? ?? '',
-    createdAt: (map['created_at'] ?? map['timestamp'] ?? 0) as int,
-    updatedAt: (map['updated_at'] ?? map['timestamp'] ?? 0) as int,
-    messageCount: (map['message_count'] as int?) ?? 0,
-    lastMessage: map['last_message'] as String?,
-    lastMessageTime: map['last_message_time'] as int?,
-  );
+        id: map['id'] as int?,
+        phoneNumber: (map['phone_number'] ?? map['sender'] ?? '') as String,
+        name: map['name'] as String? ?? '',
+        notes: map['notes'] as String? ?? '',
+        status: map['status'] as String? ?? 'New',
+        isUnsaved: ((map['is_unsaved'] as int?) ?? 1) == 1,
+        tags: map['tags'] as String? ?? '',
+        createdAt: (map['created_at'] ?? map['timestamp'] ?? 0) as int,
+        updatedAt: (map['updated_at'] ?? map['timestamp'] ?? 0) as int,
+        whatsappOptIn: ((map['whatsapp_opt_in'] as int?) ?? 0) == 1,
+        whatsappConsentUpdatedAt: map['whatsapp_consent_updated_at'] as int?,
+        messageCount: (map['message_count'] as int?) ?? 0,
+        lastMessage: map['last_message'] as String?,
+        lastMessageTime: map['last_message_time'] as int?,
+      );
 
   Lead copyWith({
     int? id,
@@ -76,21 +85,27 @@ class Lead {
     String? tags,
     int? createdAt,
     int? updatedAt,
+    bool? whatsappOptIn,
+    int? whatsappConsentUpdatedAt,
     int? messageCount,
     String? lastMessage,
     int? lastMessageTime,
-  }) => Lead(
-    id: id ?? this.id,
-    phoneNumber: phoneNumber ?? this.phoneNumber,
-    name: name ?? this.name,
-    notes: notes ?? this.notes,
-    status: status ?? this.status,
-    isUnsaved: isUnsaved ?? this.isUnsaved,
-    tags: tags ?? this.tags,
-    createdAt: createdAt ?? this.createdAt,
-    updatedAt: updatedAt ?? this.updatedAt,
-    messageCount: messageCount ?? this.messageCount,
-    lastMessage: lastMessage ?? this.lastMessage,
-    lastMessageTime: lastMessageTime ?? this.lastMessageTime,
-  );
+  }) =>
+      Lead(
+        id: id ?? this.id,
+        phoneNumber: phoneNumber ?? this.phoneNumber,
+        name: name ?? this.name,
+        notes: notes ?? this.notes,
+        status: status ?? this.status,
+        isUnsaved: isUnsaved ?? this.isUnsaved,
+        tags: tags ?? this.tags,
+        createdAt: createdAt ?? this.createdAt,
+        updatedAt: updatedAt ?? this.updatedAt,
+        whatsappOptIn: whatsappOptIn ?? this.whatsappOptIn,
+        whatsappConsentUpdatedAt:
+            whatsappConsentUpdatedAt ?? this.whatsappConsentUpdatedAt,
+        messageCount: messageCount ?? this.messageCount,
+        lastMessage: lastMessage ?? this.lastMessage,
+        lastMessageTime: lastMessageTime ?? this.lastMessageTime,
+      );
 }

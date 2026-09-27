@@ -6,7 +6,10 @@ import '../models/lead_message.dart';
 import '../services/database_service.dart';
 import '../services/contact_service.dart';
 import '../services/export_service.dart';
+import '../utils/phone_utils.dart';
 import 'detail_screen.dart';
+import 'pending_notifications_screen.dart';
+
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -20,6 +23,7 @@ class _HomeScreenState extends State<HomeScreen> {
     'totalLeads': 0,
     'unsavedLeads': 0,
     'totalMessages': 0,
+    'unmatchedNotifications': 0,
     'recentActivity': 0,
   };
 
@@ -29,7 +33,16 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    DatabaseService.dataRevision.addListener(_handleDataChanged);
     _loadDashboardData();
+  }
+
+  void _handleDataChanged() => _loadDashboardData();
+
+  @override
+  void dispose() {
+    DatabaseService.dataRevision.removeListener(_handleDataChanged);
+    super.dispose();
   }
 
   Future<void> _loadDashboardData() async {
@@ -147,10 +160,14 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   items: const [
                     DropdownMenuItem(value: 'New', child: Text('New')),
-                    DropdownMenuItem(value: 'Contacted', child: Text('Contacted')),
-                    DropdownMenuItem(value: 'Qualified', child: Text('Qualified')),
-                    DropdownMenuItem(value: 'Converted', child: Text('Converted')),
-                    DropdownMenuItem(value: 'Archived', child: Text('Archived')),
+                    DropdownMenuItem(
+                        value: 'Contacted', child: Text('Contacted')),
+                    DropdownMenuItem(
+                        value: 'Qualified', child: Text('Qualified')),
+                    DropdownMenuItem(
+                        value: 'Converted', child: Text('Converted')),
+                    DropdownMenuItem(
+                        value: 'Archived', child: Text('Archived')),
                   ],
                   onChanged: (val) {
                     if (val != null) setModalState(() => selectedStatus = val);
@@ -162,7 +179,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   maxLines: 2,
                   decoration: const InputDecoration(
                     labelText: 'Inquiry Notes',
-                    hintText: 'Customer requested price quotation for wholesale',
+                    hintText:
+                        'Customer requested price quotation for wholesale',
                     prefixIcon: Icon(Icons.notes),
                     border: OutlineInputBorder(),
                   ),
@@ -190,10 +208,11 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                     onPressed: () async {
                       final phone = phoneController.text.trim();
-                      if (phone.isEmpty) {
+                      if (!PhoneUtils.looksLikePhoneNumber(phone)) {
                         ScaffoldMessenger.of(ctx).showSnackBar(
                           const SnackBar(
-                            content: Text('Please enter a phone number'),
+                            content: Text(
+                                'Enter a valid phone number with at least 7 digits.'),
                             backgroundColor: Colors.redAccent,
                           ),
                         );
@@ -202,7 +221,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
                       final isUnsaved = ContactService.isNumberUnsaved(phone);
                       final lead = await DatabaseService.getOrCreateLead(
-                        phoneNumber: phone,
+                        phoneNumber: PhoneUtils.normalize(phone),
                         name: nameController.text.trim(),
                         notes: notesController.text.trim(),
                         status: selectedStatus,
@@ -235,7 +254,8 @@ class _HomeScreenState extends State<HomeScreen> {
                         );
                       }
                     },
-                    child: const Text('Save Lead Record', style: TextStyle(fontSize: 16)),
+                    child: const Text('Save Lead Record',
+                        style: TextStyle(fontSize: 16)),
                   ),
                 ),
               ],
@@ -245,6 +265,8 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
+
+
 
   @override
   Widget build(BuildContext context) {
@@ -260,6 +282,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
         actions: [
+
           IconButton(
             icon: const Icon(Icons.sync_rounded),
             tooltip: 'Sync Device Contacts',
@@ -273,6 +296,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
+        heroTag: 'home_fab',
         onPressed: _showAddLeadDialog,
         icon: const Icon(Icons.add),
         label: const Text('Record Lead'),
@@ -310,6 +334,18 @@ class _HomeScreenState extends State<HomeScreen> {
                   color: const Color(0xFF0D9488),
                 ),
                 _KpiCard(
+                  label: 'Unmatched WhatsApp',
+                  value: '${_stats['unmatchedNotifications'] ?? 0}',
+                  icon: Icons.mark_chat_unread_outlined,
+                  color: const Color(0xFFB45309),
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const PendingNotificationsScreen(),
+                    ),
+                  ),
+                ),
+                _KpiCard(
                   label: 'Updated Today',
                   value: '${_stats['recentActivity'] ?? 0}',
                   icon: Icons.access_time_filled_rounded,
@@ -322,7 +358,8 @@ class _HomeScreenState extends State<HomeScreen> {
             // Quick Actions Banner
             Card(
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceAround,
                   children: [
@@ -344,7 +381,8 @@ class _HomeScreenState extends State<HomeScreen> {
                         if (!context.mounted) return;
                         if (count == 0) {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('No leads found to export.')),
+                            const SnackBar(
+                                content: Text('No leads found to export.')),
                           );
                         }
                       },
@@ -368,7 +406,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 if (_recentLeads.isNotEmpty)
                   Text(
                     'Showing latest ${_recentLeads.length}',
-                    style: theme.textTheme.bodySmall?.copyWith(color: Colors.grey),
+                    style:
+                        theme.textTheme.bodySmall?.copyWith(color: Colors.grey),
                   ),
               ],
             ),
@@ -388,17 +427,20 @@ class _HomeScreenState extends State<HomeScreen> {
                   padding: const EdgeInsets.all(32),
                   child: Column(
                     children: [
-                      Icon(Icons.inbox_outlined, size: 54, color: Colors.grey.shade400),
+                      Icon(Icons.inbox_outlined,
+                          size: 54, color: Colors.grey.shade400),
                       const SizedBox(height: 12),
                       const Text(
                         'No leads recorded yet',
-                        style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
+                        style: TextStyle(
+                            fontWeight: FontWeight.w600, fontSize: 16),
                       ),
                       const SizedBox(height: 6),
                       Text(
                         'Tap "Record Lead" to log customer inquiries, unsaved numbers, and messages.',
                         textAlign: TextAlign.center,
-                        style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+                        style: TextStyle(
+                            color: Colors.grey.shade600, fontSize: 13),
                       ),
                     ],
                   ),
@@ -439,53 +481,59 @@ class _KpiCard extends StatelessWidget {
   final String value;
   final IconData icon;
   final Color color;
+  final VoidCallback? onTap;
 
   const _KpiCard({
     required this.label,
     required this.value,
     required this.icon,
     required this.color,
+    this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  label,
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.grey.shade600,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.grey.shade600,
+                    ),
                   ),
-                ),
-                Container(
-                  padding: const EdgeInsets.all(6),
-                  decoration: BoxDecoration(
-                    color: color.withAlpha(30),
-                    borderRadius: BorderRadius.circular(8),
+                  Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: color.withAlpha(30),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(icon, color: color, size: 18),
                   ),
-                  child: Icon(icon, color: color, size: 18),
-                ),
-              ],
-            ),
-            Text(
-              value,
-              style: TextStyle(
-                fontSize: 26,
-                fontWeight: FontWeight.bold,
-                color: color,
+                ],
               ),
-            ),
-          ],
+              Text(
+                value,
+                style: TextStyle(
+                  fontSize: 26,
+                  fontWeight: FontWeight.bold,
+                  color: color,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -706,8 +754,7 @@ class _LeadCard extends StatelessWidget {
                   ),
                   Text(
                     fmt.format(lead.updatedDateTime),
-                    style:
-                        TextStyle(fontSize: 11, color: Colors.grey.shade500),
+                    style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
                   ),
                 ],
               ),
