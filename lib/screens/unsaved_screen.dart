@@ -3,16 +3,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import '../models/lead.dart';
-import '../models/lead_message.dart';
 import '../services/database_service.dart';
 import '../services/contact_service.dart';
 import '../services/export_service.dart';
 import '../services/whatsapp_contact_scanner_service.dart';
 import '../services/whatsapp_service.dart';
-import '../services/chat_export_number_extractor.dart';
 import '../utils/phone_utils.dart';
 import 'detail_screen.dart';
-import 'bulk_message_screen.dart';
 import '../services/gemini_service.dart';
 
 class UnsavedScreen extends StatefulWidget {
@@ -27,6 +24,7 @@ class _UnsavedScreenState extends State<UnsavedScreen> {
   bool _isLoading = true;
   bool _isScanning = false;
   String _searchQuery = '';
+  String _selectedAiList = 'All';
 
   @override
   void initState() {
@@ -48,6 +46,9 @@ class _UnsavedScreenState extends State<UnsavedScreen> {
     final leads = await DatabaseService.getLeads(
       onlyUnsaved: true,
       query: _searchQuery.isNotEmpty ? _searchQuery : null,
+      aiList: _selectedAiList == 'All'
+          ? null
+          : (_selectedAiList == 'Uncategorized' ? '' : _selectedAiList),
       limit: 1000,
     );
     if (mounted) {
@@ -163,125 +164,6 @@ class _UnsavedScreenState extends State<UnsavedScreen> {
       }
     } finally {
       if (mounted) setState(() => _isScanning = false);
-    }
-  }
-
-  Future<void> _importHistoricalNumbers() async {
-    try {
-      final exports = await WhatsAppService.pickMultipleChatExports();
-      if (!mounted || exports == null || exports.isEmpty) return;
-
-      // Convert to ChatExportFile list
-      final chatFiles = exports
-          .map((e) => ChatExportFile(
-                fileName: e['name'] ?? '',
-                content: e['content'] ?? '',
-              ))
-          .toList();
-
-      // Extract phone numbers
-      final extracted =
-          ChatExportNumberExtractor.extractFromExports(chatFiles);
-
-      if (!mounted) return;
-
-      if (extracted.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'No phone numbers found in ${chatFiles.length} file(s).\n'
-              'Make sure you selected WhatsApp chat export .txt files.',
-            ),
-            duration: const Duration(seconds: 4),
-          ),
-        );
-        return;
-      }
-
-      // Show confirmation dialog with found numbers
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: Text('Found ${extracted.length} Numbers'),
-          content: SizedBox(
-            width: 400,
-            height: 300,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'From ${chatFiles.length} chat export(s):',
-                  style: Theme.of(ctx).textTheme.bodySmall,
-                ),
-                const SizedBox(height: 12),
-                Expanded(
-                  child: ListView.builder(
-                    itemCount: extracted.length,
-                    itemBuilder: (_, i) {
-                      final item = extracted[i];
-                      return ListTile(
-                        dense: true,
-                        leading: const Icon(Icons.phone, size: 18),
-                        title: Text(item.phoneNumber),
-                        subtitle: Text(item.source,
-                            style: const TextStyle(fontSize: 11)),
-                      );
-                    },
-                  ),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton.icon(
-              onPressed: () => Navigator.pop(ctx, true),
-              icon: const Icon(Icons.person_add, size: 16),
-              label: const Text('Import All'),
-            ),
-          ],
-        ),
-      );
-
-      if (confirmed != true || !mounted) return;
-
-      // Import as leads
-      int imported = 0;
-      for (final item in extracted) {
-        try {
-          await DatabaseService.getOrCreateLead(
-            phoneNumber: item.phoneNumber,
-            isUnsaved: true,
-            notify: false,
-          );
-          imported++;
-        } catch (_) {}
-      }
-
-      if (imported > 0) DatabaseService.notifyDataChanged();
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('$imported numbers imported to CRM.'),
-            backgroundColor: Colors.green.shade700,
-            duration: const Duration(seconds: 3),
-          ),
-        );
-        _loadUnsavedLeads();
-      }
-    } on PlatformException catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(e.message ?? 'Could not open file picker.'),
-            backgroundColor: Colors.redAccent,
-          ),
-        );
-      }
     }
   }
 
@@ -461,31 +343,14 @@ class _UnsavedScreenState extends State<UnsavedScreen> {
               ],
             ),
             content: Text(
-              'Successfully scanned $label without manual effort!\n\n'
+              'Successfully scanned $label!\n\n'
               '• Captured: ${rawNumbers.length} unsaved numbers\n'
-              '• Added to CRM: $imported leads\n\n'
-              'Would you like to start auto-messaging these scanned leads now?',
+              '• Added to CRM: $imported new customer leads',
             ),
             actions: [
-              TextButton(
+              FilledButton(
                 onPressed: () => Navigator.pop(ctx),
                 child: const Text('View Contacts'),
-              ),
-              FilledButton.icon(
-                style: FilledButton.styleFrom(backgroundColor: Colors.green.shade700),
-                onPressed: () {
-                  Navigator.pop(ctx);
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => BulkMessageScreen(
-                        initialSelectedLeadIds: importedLeadIds,
-                      ),
-                    ),
-                  );
-                },
-                icon: const Icon(Icons.send_rounded, size: 16),
-                label: const Text('Send Bulk Message'),
               ),
             ],
           ),
@@ -598,39 +463,6 @@ class _UnsavedScreenState extends State<UnsavedScreen> {
                   _batchCategorizeWithGemini();
                 },
               ),
-              ListTile(
-                leading: const Icon(Icons.file_open_rounded),
-                title: const Text('Import from Chat Exports'),
-                subtitle: const Text(
-                    'Select exported .txt files to extract numbers'),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _importHistoricalNumbers();
-                },
-              ),
-              const Divider(indent: 16, endIndent: 16),
-              Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Icon(Icons.info_outline,
-                        size: 16, color: Colors.grey.shade600),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'New messages from unsaved numbers are also captured '
-                        'automatically via the notification listener.',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey.shade600,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
             ],
           ),
         ),
@@ -734,8 +566,14 @@ class _UnsavedScreenState extends State<UnsavedScreen> {
 
     final isConfigured = await GeminiService.isConfigured();
     if (!isConfigured) {
-      final configured = await _showGeminiApiKeyDialog();
-      if (!configured || !mounted) return;
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Gemini API key is not configured. Add GEMINI_API_KEY to your .env file.'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+      return;
     }
 
     setState(() => _isScanning = true);
@@ -772,35 +610,24 @@ class _UnsavedScreenState extends State<UnsavedScreen> {
         try {
           var messages = await DatabaseService.getMessagesForLead(lead.id!);
 
-          // If no messages in database yet, automatically scrape the active chat
+          // If no messages in database yet, automatically read live chat from WhatsApp
           if (messages.isEmpty) {
             try {
               final scraped = await WhatsAppService.scrapeChatMessages(
                 phoneNumber: lead.phoneNumber,
               );
               if (scraped.isNotEmpty) {
-                for (final item in scraped) {
-                  final text = item['message'] ?? '';
-                  final dir = item['direction'] ?? 'incoming';
-                  final ts = int.tryParse(item['timestamp'] ?? '') ??
-                      DateTime.now().millisecondsSinceEpoch;
-                  if (text.isNotEmpty) {
-                    await DatabaseService.insertMessage(
-                      LeadMessage(
-                        leadId: lead.id!,
-                        phoneNumber: lead.phoneNumber,
-                        message: text,
-                        direction: dir,
-                        timestamp: ts,
-                        note: 'Live Scraped via WhatsApp Accessibility',
-                      ),
-                    );
-                  }
-                }
+                await DatabaseService.insertScrapedMessages(
+                  lead.id!,
+                  lead.phoneNumber,
+                  scraped,
+                );
                 scrapedCount++;
                 messages = await DatabaseService.getMessagesForLead(lead.id!);
               }
-            } catch (_) {}
+            } catch (err) {
+              debugPrint('Chat scrape failed for ${lead.phoneNumber}: $err');
+            }
           }
 
           final result = await GeminiService.analyzeLeadChat(
@@ -826,7 +653,7 @@ class _UnsavedScreenState extends State<UnsavedScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-                '✨ Mobi AI Profiling Complete: Analyzed $processed leads ($scrapedCount chats scraped).'),
+                '✨ Mobi AI Categorization Complete: Analyzed & sorted $processed leads ($scrapedCount WhatsApp chats read).'),
             backgroundColor: Colors.indigo.shade700,
             duration: const Duration(seconds: 4),
           ),
@@ -847,62 +674,163 @@ class _UnsavedScreenState extends State<UnsavedScreen> {
     }
   }
 
-  Future<bool> _showGeminiApiKeyDialog() async {
-    final keyController = TextEditingController();
-    final existing = await GeminiService.getApiKey();
-    if (!mounted) return false;
-    if (existing != null) keyController.text = existing;
+  Future<void> _analyzeSingleLead(Lead lead) async {
+    if (lead.id == null) return;
 
-    final saved = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Row(
+    final isConfigured = await GeminiService.isConfigured();
+    if (!isConfigured) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Gemini API key is not configured. Add GEMINI_API_KEY to your .env file.'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+      return;
+    }
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
           children: [
-            Icon(Icons.auto_awesome, color: Colors.indigo),
-            SizedBox(width: 8),
-            Text('Mobi AI Settings'),
+            const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+            ),
+            const SizedBox(width: 10),
+            Expanded(child: Text('Mobi AI reading chat for ${lead.displayName}...')),
           ],
         ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Configure your AI engine key to enable smart chat analysis, customer interest profiling, and automatic list categorization.',
-              style: TextStyle(fontSize: 13),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: keyController,
-              obscureText: true,
-              decoration: const InputDecoration(
-                labelText: 'Mobi AI Engine Key',
-                hintText: 'Paste API Key...',
-                border: OutlineInputBorder(),
+        duration: const Duration(seconds: 4),
+      ),
+    );
+
+    try {
+      var messages = await DatabaseService.getMessagesForLead(lead.id!);
+      final hasA11y = await WhatsAppService.hasAccessibilityAccess();
+
+      // Scrape WhatsApp chat if accessibility is available
+      if (hasA11y) {
+        try {
+          final scraped = await WhatsAppService.scrapeChatMessages(
+            phoneNumber: lead.phoneNumber,
+          );
+          if (scraped.isNotEmpty) {
+            await DatabaseService.insertScrapedMessages(
+              lead.id!,
+              lead.phoneNumber,
+              scraped,
+            );
+            messages = await DatabaseService.getMessagesForLead(lead.id!);
+          }
+        } catch (e) {
+          debugPrint('Single lead chat scrape error: $e');
+        }
+      }
+
+      final result = await GeminiService.analyzeLeadChat(
+        lead: lead,
+        messages: messages,
+      );
+
+      if (result != null) {
+        await GeminiService.applyAnalysisToLead(lead, result);
+        DatabaseService.notifyDataChanged();
+        if (mounted) {
+          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                '✨ Categorized into "${result.customerList}": ${result.interestSummary.isNotEmpty ? result.interestSummary : 'Profile updated'}',
               ),
+              backgroundColor: Colors.indigo.shade700,
+              duration: const Duration(seconds: 4),
             ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
+          );
+          _loadUnsavedLeads();
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('AI analysis failed: $e'),
+            backgroundColor: Colors.redAccent,
           ),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.indigo.shade700),
-            onPressed: () async {
-              final key = keyController.text.trim();
-              if (key.isNotEmpty) {
-                await GeminiService.saveApiKey(key);
-                if (ctx.mounted) Navigator.pop(ctx, true);
-              }
-            },
-            child: const Text('Save Key'),
+        );
+      }
+    }
+  }
+
+  Widget _buildAiListBadge(String aiList) {
+    if (aiList.isEmpty) return const SizedBox.shrink();
+
+    Color bgColor;
+    Color fgColor;
+    IconData icon;
+
+    switch (aiList) {
+      case 'Hot Leads':
+        bgColor = Colors.red.shade50;
+        fgColor = Colors.red.shade800;
+        icon = Icons.local_fire_department_rounded;
+        break;
+      case 'VIP Customers':
+        bgColor = Colors.amber.shade50;
+        fgColor = Colors.amber.shade900;
+        icon = Icons.star_rounded;
+        break;
+      case 'Warm Inquiries':
+        bgColor = Colors.indigo.shade50;
+        fgColor = Colors.indigo.shade800;
+        icon = Icons.forum_rounded;
+        break;
+      case 'Converted':
+        bgColor = Colors.green.shade50;
+        fgColor = Colors.green.shade800;
+        icon = Icons.check_circle_rounded;
+        break;
+      case 'Cold / Follow-Up':
+        bgColor = Colors.blueGrey.shade50;
+        fgColor = Colors.blueGrey.shade800;
+        icon = Icons.ac_unit_rounded;
+        break;
+      case 'Support':
+        bgColor = Colors.teal.shade50;
+        fgColor = Colors.teal.shade800;
+        icon = Icons.support_agent_rounded;
+        break;
+      default:
+        bgColor = Colors.purple.shade50;
+        fgColor = Colors.purple.shade800;
+        icon = Icons.auto_awesome;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: fgColor.withAlpha(77)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: fgColor),
+          const SizedBox(width: 4),
+          Text(
+            aiList,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              color: fgColor,
+            ),
           ),
         ],
       ),
     );
-    return saved ?? false;
   }
 
   @override
@@ -913,6 +841,11 @@ class _UnsavedScreenState extends State<UnsavedScreen> {
       appBar: AppBar(
         title: Text('Unsaved Leads (${_unsavedLeads.length})'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.auto_awesome, color: Colors.indigo),
+            tooltip: 'Mobi AI Auto-Categorize All',
+            onPressed: _isScanning ? null : _batchCategorizeWithGemini,
+          ),
           if (_unsavedLeads.isNotEmpty)
             IconButton(
               icon: const Icon(Icons.delete_sweep_outlined),
@@ -959,9 +892,9 @@ class _UnsavedScreenState extends State<UnsavedScreen> {
       body: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
             child: SearchBar(
-              hintText: 'Search unsaved phone, name, notes...',
+              hintText: 'Search unsaved phone, name, notes, AI summary...',
               leading: const Icon(Icons.search),
               trailing: _searchQuery.isNotEmpty
                   ? [
@@ -980,6 +913,43 @@ class _UnsavedScreenState extends State<UnsavedScreen> {
               },
             ),
           ),
+          // Mobi AI CRM Customer List filter chips
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            child: Row(
+              children: [
+                'All',
+                'Hot Leads',
+                'VIP Customers',
+                'Warm Inquiries',
+                'Converted',
+                'Cold / Follow-Up',
+                'Support',
+                'Uncategorized',
+              ].map((listName) {
+                final isSelected = _selectedAiList == listName;
+                return Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: FilterChip(
+                    selected: isSelected,
+                    label: Text(listName),
+                    selectedColor: Colors.indigo.shade100,
+                    checkmarkColor: Colors.indigo.shade800,
+                    labelStyle: TextStyle(
+                      fontSize: 12,
+                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                      color: isSelected ? Colors.indigo.shade900 : Colors.black87,
+                    ),
+                    onSelected: (val) {
+                      setState(() => _selectedAiList = listName);
+                      _loadUnsavedLeads();
+                    },
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
           Expanded(
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
@@ -994,8 +964,8 @@ class _UnsavedScreenState extends State<UnsavedScreen> {
                                   size: 64, color: Colors.green.shade300),
                               const SizedBox(height: 16),
                               Text(
-                                _searchQuery.isNotEmpty
-                                    ? 'No matching unsaved leads found'
+                                _searchQuery.isNotEmpty || _selectedAiList != 'All'
+                                    ? 'No matching leads in "$_selectedAiList"'
                                     : 'All leads are saved in contacts!',
                                 style: TextStyle(
                                   fontSize: 16,
@@ -1005,8 +975,8 @@ class _UnsavedScreenState extends State<UnsavedScreen> {
                               ),
                               const SizedBox(height: 8),
                               Text(
-                                _searchQuery.isNotEmpty
-                                    ? 'Try adjusting your search criteria.'
+                                _searchQuery.isNotEmpty || _selectedAiList != 'All'
+                                    ? 'Try changing the list filter or run Mobi AI Categorizer.'
                                     : 'When new leads with unrecognized phone numbers are recorded, they will show up here.',
                                 textAlign: TextAlign.center,
                                 style: TextStyle(
@@ -1053,12 +1023,20 @@ class _UnsavedScreenState extends State<UnsavedScreen> {
                                               crossAxisAlignment:
                                                   CrossAxisAlignment.start,
                                               children: [
-                                                Text(
-                                                  lead.displayName,
-                                                  style: const TextStyle(
-                                                    fontWeight: FontWeight.bold,
-                                                    fontSize: 15,
-                                                  ),
+                                                Row(
+                                                  children: [
+                                                    Expanded(
+                                                      child: Text(
+                                                        lead.displayName,
+                                                        style: const TextStyle(
+                                                          fontWeight: FontWeight.bold,
+                                                          fontSize: 15,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                    if (lead.aiList.isNotEmpty)
+                                                      _buildAiListBadge(lead.aiList),
+                                                  ],
                                                 ),
                                                 if (lead.name.isNotEmpty)
                                                   Text(
@@ -1095,7 +1073,61 @@ class _UnsavedScreenState extends State<UnsavedScreen> {
                                           ),
                                         ],
                                       ),
-                                      if (lead.notes.isNotEmpty) ...[
+                                      if (lead.aiSummary.isNotEmpty) ...[
+                                        Container(
+                                          margin: const EdgeInsets.only(top: 8),
+                                          padding: const EdgeInsets.all(8),
+                                          decoration: BoxDecoration(
+                                            color: Colors.indigo.shade50.withAlpha(153),
+                                            borderRadius: BorderRadius.circular(8),
+                                            border: Border.all(color: Colors.indigo.shade100),
+                                          ),
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Row(
+                                                children: [
+                                                  Icon(Icons.auto_awesome, size: 13, color: Colors.indigo.shade700),
+                                                  const SizedBox(width: 4),
+                                                  Text(
+                                                    'Mobi AI Insight',
+                                                    style: TextStyle(
+                                                      fontSize: 11,
+                                                      fontWeight: FontWeight.bold,
+                                                      color: Colors.indigo.shade900,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                              const SizedBox(height: 3),
+                                              Text(
+                                                lead.aiSummary,
+                                                style: const TextStyle(fontSize: 12, color: Color(0xFF1E1B4B)),
+                                              ),
+                                              if (lead.aiNextAction.isNotEmpty) ...[
+                                                const SizedBox(height: 4),
+                                                Row(
+                                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                                  children: [
+                                                    Icon(Icons.flag_rounded, size: 12, color: Colors.teal.shade700),
+                                                    const SizedBox(width: 4),
+                                                    Expanded(
+                                                      child: Text(
+                                                        'Next: ${lead.aiNextAction}',
+                                                        style: TextStyle(
+                                                          fontSize: 11,
+                                                          fontWeight: FontWeight.w600,
+                                                          color: Colors.teal.shade900,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ],
+                                            ],
+                                          ),
+                                        ),
+                                      ] else if (lead.notes.isNotEmpty) ...[
                                         const SizedBox(height: 6),
                                         Text(
                                           lead.notes,
@@ -1119,25 +1151,50 @@ class _UnsavedScreenState extends State<UnsavedScreen> {
                                               color: Colors.grey.shade500,
                                             ),
                                           ),
-                                          OutlinedButton.icon(
-                                            style: OutlinedButton.styleFrom(
-                                              padding:
-                                                  const EdgeInsets.symmetric(
-                                                      horizontal: 10,
-                                                      vertical: 4),
-                                              minimumSize: Size.zero,
-                                              tapTargetSize:
-                                                  MaterialTapTargetSize
-                                                      .shrinkWrap,
-                                            ),
-                                            onPressed: () =>
-                                                _handleSaveToContacts(lead),
-                                            icon: const Icon(
-                                                Icons.person_add_rounded,
-                                                size: 15),
-                                            label: const Text(
-                                                'Save to Contacts',
-                                                style: TextStyle(fontSize: 12)),
+                                          Row(
+                                            children: [
+                                              OutlinedButton.icon(
+                                                style: OutlinedButton.styleFrom(
+                                                  foregroundColor: Colors.indigo.shade700,
+                                                  side: BorderSide(color: Colors.indigo.shade200),
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
+                                                          horizontal: 8,
+                                                          vertical: 4),
+                                                  minimumSize: Size.zero,
+                                                  tapTargetSize:
+                                                      MaterialTapTargetSize
+                                                          .shrinkWrap,
+                                                ),
+                                                onPressed: () => _analyzeSingleLead(lead),
+                                                icon: const Icon(Icons.auto_awesome, size: 13),
+                                                label: Text(
+                                                  lead.aiList.isNotEmpty ? 'Re-Analyze' : 'Mobi AI',
+                                                  style: const TextStyle(fontSize: 11),
+                                                ),
+                                              ),
+                                              const SizedBox(width: 8),
+                                              OutlinedButton.icon(
+                                                style: OutlinedButton.styleFrom(
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
+                                                          horizontal: 10,
+                                                          vertical: 4),
+                                                  minimumSize: Size.zero,
+                                                  tapTargetSize:
+                                                      MaterialTapTargetSize
+                                                          .shrinkWrap,
+                                                ),
+                                                onPressed: () =>
+                                                    _handleSaveToContacts(lead),
+                                                icon: const Icon(
+                                                    Icons.person_add_rounded,
+                                                    size: 15),
+                                                label: const Text(
+                                                    'Save Contact',
+                                                    style: TextStyle(fontSize: 12)),
+                                              ),
+                                            ],
                                           ),
                                         ],
                                       ),

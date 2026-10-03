@@ -102,4 +102,85 @@ class WhatsAppService {
       'message': message,
     });
   }
+
+  /// Sends a direct reply to an active WhatsApp notification using Android RemoteInput.
+  /// Works in the background without switching apps.
+  static Future<bool> sendNotificationReply({
+    required String key,
+    required String replyText,
+  }) async {
+    try {
+      final sent = await _channel.invokeMethod<bool>('sendNotificationReply', {
+        'key': key,
+        'replyText': replyText,
+      });
+      return sent ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Checks if the notification listener service is running in Android.
+  static Future<bool> isNotificationListenerRunning() async {
+    try {
+      final running =
+          await _channel.invokeMethod<bool>('isNotificationListenerRunning');
+      return running ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Checks if the notification listener permission is granted in Android Settings.
+  static Future<bool> hasNotificationAccess() async {
+    try {
+      final hasAccess =
+          await _channel.invokeMethod<bool>('hasNotificationAccess');
+      return hasAccess ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Opens Android's Notification Access settings screen so user can enable MobiWA.
+  static Future<bool> openNotificationAccessSettings() async {
+    try {
+      final res = await _channel.invokeMethod<bool>('openNotificationAccessSettings');
+      return res ?? true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Opens Android's App Info settings (required for Xiaomi / MIUI / Android 13+ restricted settings).
+  static Future<bool> openAppDetailsSettings() async {
+    try {
+      final res = await _channel.invokeMethod<bool>('openAppDetailsSettings');
+      return res ?? true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Registers a callback invoked whenever WhatsAppNotificationListener receives a message.
+  static void registerNotificationListener(VoidCallback onNotification) {
+    _channel.setMethodCallHandler((call) async {
+      if (call.method == 'onNotificationReceived') {
+        onNotification();
+      }
+    });
+  }
+
+  /// Opens Android file picker to select an image, video, or audio file for broadcasting.
+  /// Returns the cached local file path, or null if canceled.
+  static Future<String?> pickMediaFile({String type = '*/*'}) async {
+    try {
+      final path = await _channel.invokeMethod<String>('pickMediaFile', {
+        'type': type,
+      });
+      return path;
+    } catch (_) {
+      return null;
+    }
+  }
 }

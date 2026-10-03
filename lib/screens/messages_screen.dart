@@ -1,13 +1,10 @@
 // lib/screens/messages_screen.dart
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import '../models/lead.dart';
 import '../models/lead_message.dart';
 import '../services/database_service.dart';
 import '../services/export_service.dart';
 import 'detail_screen.dart';
-import 'bulk_message_screen.dart';
-import 'pending_notifications_screen.dart';
 
 class MessagesScreen extends StatefulWidget {
   const MessagesScreen({super.key});
@@ -16,20 +13,10 @@ class MessagesScreen extends StatefulWidget {
   State<MessagesScreen> createState() => _MessagesScreenState();
 }
 
-class _MessagesScreenState extends State<MessagesScreen>
-    with SingleTickerProviderStateMixin {
+class _MessagesScreenState extends State<MessagesScreen> {
   static const _messagePageSize = 100;
-  late TabController _tabController;
   final ScrollController _messageScrollController = ScrollController();
 
-  // Leads tab state
-  List<Lead> _leads = [];
-  bool _isLoadingLeads = true;
-  String _leadSearch = '';
-  String _selectedStatus = 'All';
-  bool _onlyUnsaved = false;
-
-  // Messages tab state
   List<LeadMessage> _messages = [];
   bool _isLoadingMessages = false;
   bool _isLoadingMoreMessages = false;
@@ -38,28 +25,15 @@ class _MessagesScreenState extends State<MessagesScreen>
   int _messageOffset = 0;
   int _messageRequestId = 0;
 
-  final List<String> _statuses = [
-    'All',
-    'New',
-    'Contacted',
-    'Qualified',
-    'Converted',
-    'Archived',
-  ];
-
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
-    _tabController.addListener(_handleTabChanged);
     _messageScrollController.addListener(_handleMessageScroll);
     DatabaseService.dataRevision.addListener(_handleDataChanged);
-    _loadLeads();
     _loadRecentMessages();
   }
 
   void _handleDataChanged() {
-    _loadLeads();
     if (_messageSearch.trim().isNotEmpty) {
       _searchMessages(_messageSearch);
     } else {
@@ -67,36 +41,13 @@ class _MessagesScreenState extends State<MessagesScreen>
     }
   }
 
-  void _handleTabChanged() {
-    if (_tabController.indexIsChanging || !mounted) return;
-    setState(() {});
-  }
-
   @override
   void dispose() {
-    _tabController.removeListener(_handleTabChanged);
-    _tabController.dispose();
     _messageScrollController
       ..removeListener(_handleMessageScroll)
       ..dispose();
     DatabaseService.dataRevision.removeListener(_handleDataChanged);
     super.dispose();
-  }
-
-  Future<void> _loadLeads() async {
-    setState(() => _isLoadingLeads = true);
-    final results = await DatabaseService.getLeads(
-      query: _leadSearch.isNotEmpty ? _leadSearch : null,
-      status: _selectedStatus != 'All' ? _selectedStatus : null,
-      onlyUnsaved: _onlyUnsaved ? true : null,
-      limit: 500,
-    );
-    if (mounted) {
-      setState(() {
-        _leads = results;
-        _isLoadingLeads = false;
-      });
-    }
   }
 
   Future<void> _searchMessages(String query) async {
@@ -168,65 +119,47 @@ class _MessagesScreenState extends State<MessagesScreen>
     }
   }
 
-  Future<void> _exportCurrentTab() async {
-    final exportedCount = _tabController.index == 0
-        ? await ExportService.exportLeadsToCSV(onlyUnsaved: _onlyUnsaved)
-        : await ExportService.exportAllMessagesToCSV();
-    if (!mounted || exportedCount > 0) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(_tabController.index == 0
-            ? 'No leads to export.'
-            : 'No messages to export.'),
-      ),
-    );
+  Future<void> _exportMessages() async {
+    final count = await ExportService.exportAllMessagesToCSV();
+    if (!mounted) return;
+    if (count == 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No messages to export.')),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Exported $count messages to CSV.'),
+          backgroundColor: Colors.green.shade700,
+        ),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final fmt = DateFormat('MMM d, h:mm a');
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Search & Records'),
-        bottom: TabBar(
-          controller: _tabController,
-          tabs: const [
-            Tab(icon: Icon(Icons.people_alt_rounded), text: 'Leads Directory'),
-            Tab(icon: Icon(Icons.search_rounded), text: 'Message Content'),
+        title: const Row(
+          children: [
+            Icon(Icons.chat_bubble_outline_rounded, color: Color(0xFF0D9488)),
+            SizedBox(width: 8),
+            Text('Message History', style: TextStyle(fontWeight: FontWeight.bold)),
           ],
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.mark_chat_unread_outlined),
-            tooltip: 'Review unmatched WhatsApp previews',
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => const PendingNotificationsScreen(),
-              ),
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.playlist_add_check_rounded),
-            tooltip: 'Draft queue for opted-in contacts',
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const BulkMessageScreen()),
-            ),
-          ),
-          IconButton(
             icon: const Icon(Icons.download_rounded),
-            tooltip: _tabController.index == 0
-                ? 'Export leads CSV'
-                : 'Export all messages CSV',
-            onPressed: _exportCurrentTab,
+            tooltip: 'Export messages CSV',
+            onPressed: _exportMessages,
           ),
           IconButton(
             icon: const Icon(Icons.refresh_rounded),
             tooltip: 'Refresh',
             onPressed: () {
-              if (_tabController.index == 0) {
-                _loadLeads();
-              } else if (_messageSearch.trim().isEmpty) {
+              if (_messageSearch.trim().isEmpty) {
                 _loadRecentMessages();
               } else {
                 _searchMessages(_messageSearch);
@@ -235,309 +168,160 @@ class _MessagesScreenState extends State<MessagesScreen>
           ),
         ],
       ),
-      body: TabBarView(
-        controller: _tabController,
+      body: Column(
         children: [
-          // Tab 1: Leads Directory
-          _buildLeadsTab(),
-
-          // Tab 2: Message Search
-          _buildMessagesTab(),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildLeadsTab() {
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
-          child: SearchBar(
-            hintText: 'Search leads by name, phone, notes...',
-            leading: const Icon(Icons.search),
-            trailing: _leadSearch.isNotEmpty
-                ? [
-                    IconButton(
-                      icon: const Icon(Icons.clear),
-                      onPressed: () {
-                        setState(() => _leadSearch = '');
-                        _loadLeads();
-                      },
-                    )
-                  ]
-                : null,
-            onChanged: (val) {
-              _leadSearch = val;
-              _loadLeads();
-            },
-          ),
-        ),
-
-        // Status & Unsaved filter chips
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-          child: Row(
-            children: [
-              FilterChip(
-                label: const Text('Unsaved Only'),
-                selected: _onlyUnsaved,
-                onSelected: (selected) {
-                  setState(() => _onlyUnsaved = selected);
-                  _loadLeads();
-                },
-              ),
-              const SizedBox(width: 8),
-              ..._statuses.map(
-                (status) => Padding(
-                  padding: const EdgeInsets.only(right: 6),
-                  child: ChoiceChip(
-                    label: Text(status),
-                    selected: _selectedStatus == status,
-                    onSelected: (selected) {
-                      if (selected) {
-                        setState(() => _selectedStatus = status);
-                        _loadLeads();
-                      }
-                    },
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-
-        // Leads List
-        Expanded(
-          child: _isLoadingLeads
-              ? const Center(child: CircularProgressIndicator())
-              : _leads.isEmpty
-                  ? Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.person_search_rounded,
-                              size: 54, color: Colors.grey.shade400),
-                          const SizedBox(height: 12),
-                          const Text(
-                            'No matching leads',
-                            style: TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Try changing filters or search terms.',
-                            style: TextStyle(
-                                color: Colors.grey.shade600, fontSize: 13),
-                          ),
-                        ],
-                      ),
-                    )
-                  : RefreshIndicator(
-                      onRefresh: _loadLeads,
-                      child: ListView.separated(
-                        padding: const EdgeInsets.all(16),
-                        itemCount: _leads.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 8),
-                        itemBuilder: (ctx, i) {
-                          final lead = _leads[i];
-                          return Card(
-                            child: ListTile(
-                              leading: CircleAvatar(
-                                backgroundColor: lead.isUnsaved
-                                    ? Colors.orange.shade100
-                                    : Colors.teal.shade100,
-                                child: Icon(
-                                  lead.isUnsaved
-                                      ? Icons.person_off_rounded
-                                      : Icons.person_rounded,
-                                  color: lead.isUnsaved
-                                      ? Colors.orange.shade800
-                                      : Colors.teal.shade800,
-                                  size: 20,
-                                ),
-                              ),
-                              title: Row(
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      lead.displayName,
-                                      style: const TextStyle(
-                                          fontWeight: FontWeight.bold),
-                                    ),
-                                  ),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 6, vertical: 2),
-                                    decoration: BoxDecoration(
-                                      color: Colors.grey.withAlpha(30),
-                                      borderRadius: BorderRadius.circular(4),
-                                    ),
-                                    child: Text(
-                                      lead.status,
-                                      style: const TextStyle(fontSize: 11),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              subtitle: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  if (lead.name.isNotEmpty)
-                                    Text(lead.phoneNumber,
-                                        style: const TextStyle(fontSize: 12)),
-                                  if (lead.notes.isNotEmpty)
-                                    Text(
-                                      lead.notes,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                          color: Colors.grey.shade700,
-                                          fontSize: 12),
-                                    ),
-                                ],
-                              ),
-                              trailing:
-                                  const Icon(Icons.chevron_right, size: 20),
-                              onTap: () async {
-                                await Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) =>
-                                        DetailScreen(leadId: lead.id!),
-                                  ),
-                                );
-                                _loadLeads();
-                              },
-                            ),
-                          );
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+            child: SearchBar(
+              hintText: 'Search keyword across all customer chats...',
+              leading: const Icon(Icons.search),
+              trailing: _messageSearch.isNotEmpty
+                  ? [
+                      IconButton(
+                        icon: const Icon(Icons.clear),
+                        onPressed: () {
+                          setState(() => _messageSearch = '');
+                          _searchMessages('');
                         },
-                      ),
-                    ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildMessagesTab() {
-    final fmt = DateFormat('MMM d, h:mm a');
-
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.all(16),
-          child: SearchBar(
-            hintText: 'Search keyword across all message logs...',
-            leading: const Icon(Icons.search),
-            trailing: _messageSearch.isNotEmpty
-                ? [
-                    IconButton(
-                      icon: const Icon(Icons.clear),
-                      onPressed: () {
-                        setState(() => _messageSearch = '');
-                        _searchMessages('');
-                      },
-                    )
-                  ]
-                : null,
-            onChanged: _searchMessages,
+                      )
+                    ]
+                  : null,
+              onChanged: _searchMessages,
+            ),
           ),
-        ),
-        Expanded(
-          child: _isLoadingMessages
-              ? const Center(child: CircularProgressIndicator())
-              : _messages.isEmpty
-                  ? Center(
-                      child: Padding(
-                        padding: const EdgeInsets.all(32),
+          Expanded(
+            child: _isLoadingMessages
+                ? const Center(child: CircularProgressIndicator())
+                : _messages.isEmpty
+                    ? Center(
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Icon(
-                                _messageSearch.isEmpty
-                                    ? Icons.chat_bubble_outline
-                                    : Icons.find_in_page_outlined,
-                                size: 54,
-                                color: Colors.grey.shade400),
+                            Icon(Icons.chat_outlined,
+                                size: 54, color: Colors.grey.shade400),
                             const SizedBox(height: 12),
-                            Text(
-                              _messageSearch.isEmpty
-                                  ? 'No messages recorded yet'
-                                  : 'No matching messages',
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.bold, fontSize: 16),
+                            const Text(
+                              'No messages found',
+                              style: TextStyle(fontWeight: FontWeight.bold),
                             ),
-                            const SizedBox(height: 6),
+                            const SizedBox(height: 4),
                             Text(
-                              _messageSearch.isEmpty
-                                  ? 'Incoming WhatsApp previews and messages you confirm as sent will appear here.'
-                                  : 'Try another search term.',
-                              textAlign: TextAlign.center,
+                              _messageSearch.isNotEmpty
+                                  ? 'Try searching a different keyword.'
+                                  : 'Messages read by Mobi AI will appear here.',
                               style: TextStyle(
                                   color: Colors.grey.shade600, fontSize: 13),
                             ),
                           ],
                         ),
-                      ),
-                    )
-                  : ListView.separated(
-                      controller: _messageScrollController,
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      itemCount: _messages.length + (_hasMoreMessages ? 1 : 0),
-                      separatorBuilder: (_, __) => const SizedBox(height: 8),
-                      itemBuilder: (ctx, i) {
-                        if (i >= _messages.length) {
-                          return const Padding(
-                            padding: EdgeInsets.all(16),
-                            child: Center(child: CircularProgressIndicator()),
-                          );
-                        }
-                        final msg = _messages[i];
-                        return Card(
-                          child: ListTile(
-                            leading: Icon(
-                              msg.direction == 'outgoing'
-                                  ? Icons.call_made_rounded
-                                  : Icons.call_received_rounded,
-                              color: msg.direction == 'outgoing'
-                                  ? Colors.blue
-                                  : Colors.green,
-                            ),
-                            title: Text(msg.message),
-                            subtitle: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                if (msg.note.isNotEmpty)
-                                  Text('Note: ${msg.note}',
-                                      style: const TextStyle(
-                                          fontSize: 12,
-                                          fontStyle: FontStyle.italic)),
-                                Text(
-                                  '${msg.phoneNumber} • ${fmt.format(msg.dateTime)}',
-                                  style: TextStyle(
-                                      fontSize: 11,
-                                      color: Colors.grey.shade500),
-                                ),
-                              ],
-                            ),
-                            trailing:
-                                const Icon(Icons.arrow_forward_ios, size: 14),
-                            onTap: () async {
-                              await Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) =>
-                                      DetailScreen(leadId: msg.leadId),
+                      )
+                    : RefreshIndicator(
+                        onRefresh: () async {
+                          if (_messageSearch.trim().isEmpty) {
+                            await _loadRecentMessages();
+                          } else {
+                            await _searchMessages(_messageSearch);
+                          }
+                        },
+                        child: ListView.separated(
+                          controller: _messageScrollController,
+                          padding: const EdgeInsets.all(16),
+                          itemCount:
+                              _messages.length + (_isLoadingMoreMessages ? 1 : 0),
+                          separatorBuilder: (_, __) => const SizedBox(height: 8),
+                          itemBuilder: (ctx, i) {
+                            if (i == _messages.length) {
+                              return const Center(
+                                child: Padding(
+                                  padding: EdgeInsets.all(16),
+                                  child: CircularProgressIndicator(),
                                 ),
                               );
-                              _searchMessages(_messageSearch);
-                            },
-                          ),
-                        );
-                      },
-                    ),
-        ),
-      ],
+                            }
+
+                            final msg = _messages[i];
+                            final isOutgoing = msg.direction == 'outgoing';
+
+                            return Card(
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(14),
+                                onTap: () {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) =>
+                                          DetailScreen(leadId: msg.leadId),
+                                    ),
+                                  );
+                                },
+                                child: Padding(
+                                  padding: const EdgeInsets.all(12),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          Row(
+                                            children: [
+                                              Icon(
+                                                isOutgoing
+                                                    ? Icons.call_made_rounded
+                                                    : Icons.call_received_rounded,
+                                                size: 14,
+                                                color: isOutgoing
+                                                    ? Colors.teal
+                                                    : Colors.blueGrey,
+                                              ),
+                                              const SizedBox(width: 4),
+                                              Text(
+                                                msg.phoneNumber,
+                                                style: const TextStyle(
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 13,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          Text(
+                                            fmt.format(msg.dateTime),
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              color: Colors.grey.shade600,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        msg.message,
+                                        style: const TextStyle(fontSize: 13),
+                                        maxLines: 4,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                      if (msg.note.isNotEmpty) ...[
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          msg.note,
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            fontStyle: FontStyle.italic,
+                                            color: Colors.indigo.shade600,
+                                          ),
+                                        ),
+                                      ],
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+          ),
+        ],
+      ),
     );
   }
 }

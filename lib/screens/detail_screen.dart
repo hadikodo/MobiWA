@@ -28,8 +28,6 @@ class _DetailScreenState extends State<DetailScreen>
   late TextEditingController _notesController;
   late TextEditingController _tagsController;
   String _currentStatus = 'New';
-  _PendingOutgoingMessage? _pendingOutgoingMessage;
-  bool _confirmingReturnedMessage = false;
 
   final List<String> _statuses = [
     'New',
@@ -42,7 +40,6 @@ class _DetailScreenState extends State<DetailScreen>
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
     DatabaseService.dataRevision.addListener(_handleDataChanged);
     _nameController = TextEditingController();
     _notesController = TextEditingController();
@@ -52,61 +49,11 @@ class _DetailScreenState extends State<DetailScreen>
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
     DatabaseService.dataRevision.removeListener(_handleDataChanged);
     _nameController.dispose();
     _notesController.dispose();
     _tagsController.dispose();
     super.dispose();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      _confirmReturnedOutgoingMessage();
-    }
-  }
-
-  Future<void> _confirmReturnedOutgoingMessage() async {
-    final pending = _pendingOutgoingMessage;
-    if (pending == null || _confirmingReturnedMessage || !mounted) return;
-    _pendingOutgoingMessage = null;
-    _confirmingReturnedMessage = true;
-    await Future<void>.delayed(const Duration(milliseconds: 350));
-    if (!mounted) return;
-    final sent = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Did you send this message?'),
-        content: const Text(
-          'MobiWA cannot verify delivery in WhatsApp. Confirm only if you tapped Send; then the message will be added to this lead’s history.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Not sent'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('Yes, save to history'),
-          ),
-        ],
-      ),
-    );
-    if (sent == true && mounted) {
-      await DatabaseService.insertMessage(
-        LeadMessage(
-          leadId: widget.leadId,
-          phoneNumber: pending.phoneNumber,
-          message: pending.message,
-          direction: 'outgoing',
-          timestamp: DateTime.now().millisecondsSinceEpoch,
-          note: 'Sent via WhatsApp (user confirmed)',
-        ),
-      );
-      await _loadLeadData();
-    }
-    _confirmingReturnedMessage = false;
   }
 
   void _handleDataChanged() {
@@ -162,29 +109,37 @@ class _DetailScreenState extends State<DetailScreen>
     }
   }
 
-  Future<void> _analyzeChatWithGemini() async {
+  Future<void> _analyzeChatWithGemini({bool scrapeLive = false}) async {
     if (_lead == null) return;
 
     final isConfigured = await GeminiService.isConfigured();
     if (!isConfigured) {
-      final configured = await _showGeminiApiKeyDialog();
-      if (!configured || !mounted) return;
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Gemini API key is not configured. Add GEMINI_API_KEY to your .env file.'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+      return;
     }
 
     if (!mounted) return;
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) => const Center(
+      builder: (ctx) => Center(
         child: Card(
           child: Padding(
-            padding: EdgeInsets.all(24),
+            padding: const EdgeInsets.all(24),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                CircularProgressIndicator(strokeWidth: 2),
-                SizedBox(width: 16),
-                Text('Mobi AI analyzing customer chat...'),
+                const CircularProgressIndicator(strokeWidth: 2),
+                const SizedBox(width: 16),
+                Text(scrapeLive
+                    ? 'Reading WhatsApp & profiling with Mobi AI...'
+                    : 'Mobi AI analyzing customer chat...'),
               ],
             ),
           ),
@@ -195,36 +150,37 @@ class _DetailScreenState extends State<DetailScreen>
     try {
       var currentMessages = List<LeadMessage>.from(_messages);
 
-      // If no messages recorded in DB, auto-scrape live from WhatsApp
-      if (currentMessages.isEmpty) {
+      // Scrape live WhatsApp messages if requested or if current messages list is empty
+      if (scrapeLive || currentMessages.isEmpty) {
         final hasA11y = await WhatsAppService.hasAccessibilityAccess();
         if (hasA11y) {
           final scraped = await WhatsAppService.scrapeChatMessages(
             phoneNumber: _lead!.phoneNumber,
           );
-          if (scraped.isNotEmpty) {
-            for (final item in scraped) {
-              final text = item['message'] ?? '';
-              final dir = item['direction'] ?? 'incoming';
-              final ts = int.tryParse(item['timestamp'] ?? '') ??
-                  DateTime.now().millisecondsSinceEpoch;
-              if (text.isNotEmpty) {
-                await DatabaseService.insertMessage(
-                  LeadMessage(
-                    leadId: _lead!.id!,
-                    phoneNumber: _lead!.phoneNumber,
-                    message: text,
-                    direction: dir,
-                    timestamp: ts,
-                    note: 'Live Scraped via WhatsApp Accessibility',
-                  ),
-                );
-              }
-            }
+          if (scraped.isNotEmpty && _lead!.id != null) {
+            await DatabaseService.insertScrapedMessages(
+              _lead!.id!,
+              _lead!.phoneNumber,
+              scraped,
+            );
             await _loadLeadData();
-            currentMessages = await DatabaseService.getMessagesForLead(_lead!.id!);
+            currentMessages =
+                await DatabaseService.getMessagesForLead(_lead!.id!);
           }
         }
+      }
+
+      if (currentMessages.isEmpty) {
+        if (!mounted) return;
+        Navigator.pop(context); // Dismiss loading
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'No messages found. Enable WhatsApp Accessibility and tap "Read WhatsApp & Profile".',
+            ),
+          ),
+        );
+        return;
       }
 
       final result = await GeminiService.analyzeLeadChat(
@@ -248,7 +204,7 @@ class _DetailScreenState extends State<DetailScreen>
         builder: (ctx) => AlertDialog(
           title: const Row(
             children: [
-              Icon(Icons.auto_awesome, color: Colors.indigo),
+              Icon(Icons.auto_awesome, color: Color(0xFF4F46E5)),
               SizedBox(width: 8),
               Text('Mobi AI Insights'),
             ],
@@ -258,29 +214,77 @@ class _DetailScreenState extends State<DetailScreen>
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.indigo.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.indigo.shade200),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.hub_outlined,
+                          size: 16, color: Color(0xFF4F46E5)),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          'Assigned List: ${result.customerList}',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF3730A3),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
                 if (result.suggestedName.isNotEmpty) ...[
-                  const Text('Detected Name:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                  const Text('Detected Name:',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
                   Text(result.suggestedName),
                   const SizedBox(height: 10),
                 ],
-                const Text('Stage:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                const Text('Stage:',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
                 Text(result.status),
                 const SizedBox(height: 10),
-                const Text('Detected Interest & Requirements:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                Text(result.interestSummary.isNotEmpty ? result.interestSummary : 'General inquiry'),
+                const Text('Detected Interest & Requirements:',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                Text(result.interestSummary.isNotEmpty
+                    ? result.interestSummary
+                    : 'General inquiry'),
                 const SizedBox(height: 10),
+                if (result.nextAction.isNotEmpty) ...[
+                  const Text('Recommended Next Action:',
+                      style:
+                          TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                  Text(
+                    result.nextAction,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF0F766E),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                ],
                 if (result.lastPurchasedOrRequestedItem.isNotEmpty) ...[
-                  const Text('Item Requested / Bought:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                  const Text('Item Requested / Bought:',
+                      style:
+                          TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
                   Text(result.lastPurchasedOrRequestedItem),
                   const SizedBox(height: 10),
                 ],
-                const Text('Categorical Tags:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                const Text('Categorical Tags:',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
                 Wrap(
                   spacing: 6,
                   runSpacing: 4,
                   children: result.tags
                       .map((t) => Chip(
-                            label: Text('#$t', style: const TextStyle(fontSize: 11)),
+                            label: Text('#$t',
+                                style: const TextStyle(fontSize: 11)),
                             backgroundColor: Colors.indigo.shade50,
                             padding: EdgeInsets.zero,
                           ))
@@ -295,7 +299,8 @@ class _DetailScreenState extends State<DetailScreen>
               child: const Text('Discard'),
             ),
             FilledButton.icon(
-              style: FilledButton.styleFrom(backgroundColor: Colors.indigo.shade700),
+              style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF4F46E5)),
               onPressed: () => Navigator.pop(ctx, true),
               icon: const Icon(Icons.check, size: 16),
               label: const Text('Apply AI Profile'),
@@ -309,9 +314,9 @@ class _DetailScreenState extends State<DetailScreen>
         await _loadLeadData();
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: const Text('Mobi AI profile applied to lead!'),
-              backgroundColor: Colors.indigo.shade700,
+            const SnackBar(
+              content: Text('Mobi AI profile applied to lead!'),
+              backgroundColor: Color(0xFF4F46E5),
             ),
           );
         }
@@ -329,62 +334,248 @@ class _DetailScreenState extends State<DetailScreen>
     }
   }
 
-  Future<bool> _showGeminiApiKeyDialog() async {
-    final keyController = TextEditingController();
-    final existing = await GeminiService.getApiKey();
-    if (!mounted) return false;
-    if (existing != null) keyController.text = existing;
-
-    final saved = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Row(
-          children: [
-            Icon(Icons.auto_awesome, color: Colors.indigo),
-            SizedBox(width: 8),
-            Text('Mobi AI Settings'),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Configure your AI engine key to enable smart chat analysis, customer interest profiling, and list categorization.',
-              style: TextStyle(fontSize: 13),
+  Widget _buildAiListBadge(String aiList) {
+    Color bg;
+    Color fg;
+    IconData icon;
+    switch (aiList) {
+      case 'Hot Leads':
+        bg = const Color(0xFFFFE4E6);
+        fg = const Color(0xFFBE123C);
+        icon = Icons.local_fire_department_rounded;
+        break;
+      case 'VIP Customers':
+        bg = const Color(0xFFFEF3C7);
+        fg = const Color(0xFFB45309);
+        icon = Icons.star_rounded;
+        break;
+      case 'Warm Inquiries':
+        bg = const Color(0xFFE0E7FF);
+        fg = const Color(0xFF3730A3);
+        icon = Icons.chat_bubble_rounded;
+        break;
+      case 'Converted':
+        bg = const Color(0xFFD1FAE5);
+        fg = const Color(0xFF065F46);
+        icon = Icons.verified_rounded;
+        break;
+      case 'Cold / Follow-Up':
+        bg = const Color(0xFFF1F5F9);
+        fg = const Color(0xFF475569);
+        icon = Icons.ac_unit_rounded;
+        break;
+      case 'Support':
+        bg = const Color(0xFFEDE9FE);
+        fg = const Color(0xFF5B21B6);
+        icon = Icons.support_agent_rounded;
+        break;
+      default:
+        bg = Colors.grey.shade200;
+        fg = Colors.grey.shade800;
+        icon = Icons.label_rounded;
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: fg),
+          const SizedBox(width: 4),
+          Text(
+            aiList,
+            style: TextStyle(
+              color: fg,
+              fontWeight: FontWeight.bold,
+              fontSize: 11,
             ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: keyController,
-              obscureText: true,
-              decoration: const InputDecoration(
-                labelText: 'Mobi AI Engine Key',
-                hintText: 'Paste API Key...',
-                border: OutlineInputBorder(),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.indigo.shade700),
-            onPressed: () async {
-              final key = keyController.text.trim();
-              if (key.isNotEmpty) {
-                await GeminiService.saveApiKey(key);
-                if (ctx.mounted) Navigator.pop(ctx, true);
-              }
-            },
-            child: const Text('Save Key'),
           ),
         ],
       ),
     );
-    return saved ?? false;
+  }
+
+  Widget _buildMobiAiCrmCard() {
+    final aiList = _lead!.aiList;
+    final hasAi = aiList.isNotEmpty || _lead!.aiSummary.isNotEmpty;
+
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(
+          color: hasAi ? Colors.indigo.shade200 : Colors.grey.shade300,
+          width: 1.2,
+        ),
+      ),
+      color: hasAi
+          ? Colors.indigo.shade50.withAlpha(90)
+          : Colors.grey.shade50.withAlpha(120),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF4F46E5),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(Icons.auto_awesome,
+                          color: Colors.white, size: 16),
+                    ),
+                    const SizedBox(width: 8),
+                    const Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Mobi AI • CRM Profile',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 15,
+                          ),
+                        ),
+                        Text(
+                          'Powered by Gemini AI',
+                          style: TextStyle(fontSize: 11, color: Colors.grey),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                PopupMenuButton<String>(
+                  tooltip: 'Change CRM List',
+                  icon: const Icon(Icons.edit_note_rounded, size: 22),
+                  onSelected: (selectedList) async {
+                    await DatabaseService.setLeadAiList(
+                        widget.leadId, selectedList);
+                    await _loadLeadData();
+                  },
+                  itemBuilder: (_) => GeminiService.standardCustomerLists
+                      .map(
+                        (item) => PopupMenuItem(
+                          value: item,
+                          child: Text(item),
+                        ),
+                      )
+                      .toList(),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                const Text(
+                  'Customer List: ',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                ),
+                _buildAiListBadge(aiList.isNotEmpty ? aiList : 'Uncategorized'),
+              ],
+            ),
+            const SizedBox(height: 8),
+            if (_lead!.aiSummary.isNotEmpty) ...[
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.indigo.shade100),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'AI Need & Interest Summary:',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF3730A3),
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      _lead!.aiSummary,
+                      style: const TextStyle(
+                          fontSize: 12, color: Color(0xFF1E1B4B)),
+                    ),
+                    if (_lead!.aiNextAction.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Icon(Icons.flag_rounded,
+                              size: 13, color: Color(0xFF0F766E)),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              'Next Action: ${_lead!.aiNextAction}',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF0F766E),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
+            ] else ...[
+              Text(
+                'No conversation analyzed yet for this lead.',
+                style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+              ),
+              const SizedBox(height: 10),
+            ],
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF4F46E5),
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                    ),
+                    onPressed: () => _analyzeChatWithGemini(scrapeLive: true),
+                    icon: const Icon(Icons.chat_bubble_outline, size: 15),
+                    label: const Text(
+                      'Read WhatsApp & Profile',
+                      style:
+                          TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFF4F46E5),
+                    side: BorderSide(color: Colors.indigo.shade200),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  ),
+                  onPressed: () => _analyzeChatWithGemini(scrapeLive: false),
+                  icon: const Icon(Icons.auto_awesome, size: 14),
+                  label:
+                      const Text('Re-Analyze', style: TextStyle(fontSize: 12)),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _handleSaveToContacts() async {
@@ -533,109 +724,17 @@ class _DetailScreenState extends State<DetailScreen>
     );
   }
 
-  Future<void> _showWhatsAppComposer() async {
+  Future<void> _openWhatsAppChat() async {
     if (_lead == null) return;
-    if (!_lead!.whatsappOptIn) {
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: const Text('Record recipient opt-in first'),
-          content: const Text(
-            'Only prepare a WhatsApp message after the recipient has agreed to receive messages. Record their consent on this lead first.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, true),
-              child: const Text('Record opt-in'),
-            ),
-          ],
-        ),
-      );
-      if (confirmed != true || !mounted) return;
-      await DatabaseService.setWhatsAppOptIn(widget.leadId, true);
-      await _loadLeadData();
-      if (!mounted) return;
+    try {
+      await WhatsAppService.openChat(phoneNumber: _lead!.phoneNumber);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not open WhatsApp: $e')),
+        );
+      }
     }
-    final messageController = TextEditingController();
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (ctx) => Padding(
-        padding: EdgeInsets.fromLTRB(
-          20,
-          24,
-          20,
-          MediaQuery.of(ctx).viewInsets.bottom + 24,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Prepare WhatsApp message',
-                style: Theme.of(context).textTheme.titleLarge),
-            const SizedBox(height: 8),
-            Text('To ${_lead!.displayName} • ${_lead!.phoneNumber}'),
-            const SizedBox(height: 12),
-            TextField(
-              controller: messageController,
-              autofocus: true,
-              maxLines: 5,
-              decoration: const InputDecoration(
-                labelText: 'Message draft',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'WhatsApp will open with this draft. Review it and tap Send in WhatsApp. MobiWA does not send or mark it sent automatically.',
-              style: TextStyle(fontSize: 12),
-            ),
-            const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                icon: const Icon(Icons.open_in_new),
-                label: const Text('Open WhatsApp'),
-                onPressed: () async {
-                  try {
-                    final message = messageController.text.trim();
-                    if (message.isEmpty) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Enter a message draft first.')),
-                      );
-                      return;
-                    }
-                    _pendingOutgoingMessage = _PendingOutgoingMessage(
-                      phoneNumber: _lead!.phoneNumber,
-                      message: message,
-                    );
-                    await WhatsAppService.openChat(
-                      phoneNumber: _lead!.phoneNumber,
-                      message: message,
-                    );
-                    if (ctx.mounted) Navigator.pop(ctx);
-                  } on PlatformException catch (error) {
-                    _pendingOutgoingMessage = null;
-                    if (ctx.mounted) {
-                      ScaffoldMessenger.of(ctx).showSnackBar(
-                        SnackBar(
-                            content: Text(
-                                error.message ?? 'Could not open WhatsApp.')),
-                      );
-                    }
-                  }
-                },
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-    messageController.dispose();
   }
 
   Future<void> _handleDeleteLead() async {
@@ -712,6 +811,10 @@ class _DetailScreenState extends State<DetailScreen>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Mobi AI CRM Profile Card
+            _buildMobiAiCrmCard(),
+            const SizedBox(height: 16),
+
             // Lead Information Card
             Card(
               child: Padding(
@@ -781,24 +884,21 @@ class _DetailScreenState extends State<DetailScreen>
                     SizedBox(
                       width: double.infinity,
                       child: FilledButton.icon(
-                        onPressed: _showWhatsAppComposer,
-                        icon: const Icon(Icons.chat_rounded),
-                        label: const Text('Prepare WhatsApp Message'),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: const Color(0xFF16A34A),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                        ),
+                        onPressed: _openWhatsAppChat,
+                        icon: const Icon(Icons.chat_rounded, size: 18),
+                        label: const Text(
+                          'Open WhatsApp Chat',
+                          style: TextStyle(
+                              fontSize: 14, fontWeight: FontWeight.bold),
+                        ),
                       ),
-                    ),
-                    SwitchListTile.adaptive(
-                      contentPadding: EdgeInsets.zero,
-                      value: _lead!.whatsappOptIn,
-                      title: const Text('Recipient has opted in'),
-                      subtitle: const Text(
-                        'Enable only after recording their permission to receive WhatsApp messages. Turn off on opt-out.',
-                      ),
-                      onChanged: (value) async {
-                        await DatabaseService.setWhatsAppOptIn(
-                          widget.leadId,
-                          value,
-                        );
-                      },
                     ),
 
                     // Unsaved Warning & Action
@@ -1064,14 +1164,4 @@ class _DetailScreenState extends State<DetailScreen>
       ),
     );
   }
-}
-
-class _PendingOutgoingMessage {
-  const _PendingOutgoingMessage({
-    required this.phoneNumber,
-    required this.message,
-  });
-
-  final String phoneNumber;
-  final String message;
 }

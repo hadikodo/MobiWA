@@ -1,13 +1,12 @@
 // lib/screens/settings_screen.dart
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
-import '../models/lead.dart';
 import '../services/contact_service.dart';
 import '../services/database_service.dart';
 import '../services/export_service.dart';
 import '../services/whatsapp_service.dart';
-import '../services/whatsapp_export_parser.dart';
+import 'auto_responder_screen.dart';
+import 'broadcast_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -19,8 +18,8 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen>
     with WidgetsBindingObserver {
   bool _contactsGranted = false;
-  bool _notificationAccessGranted = false;
   bool _accessibilityGranted = false;
+  bool _notificationGranted = false;
   bool _isSyncing = false;
   bool _isImportingContacts = false;
   String _statusMsg = '';
@@ -31,13 +30,9 @@ class _SettingsScreenState extends State<SettingsScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    WhatsAppService.pendingSharedChatExport
-        .addListener(_handleSharedChatExport);
     DatabaseService.dataRevision.addListener(_refreshContactSyncInfo);
     _checkPermissions();
     _refreshContactSyncInfo();
-    WidgetsBinding.instance
-        .addPostFrameCallback((_) => _handleSharedChatExport());
   }
 
   @override
@@ -49,8 +44,6 @@ class _SettingsScreenState extends State<SettingsScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     DatabaseService.dataRevision.removeListener(_refreshContactSyncInfo);
-    WhatsAppService.pendingSharedChatExport
-        .removeListener(_handleSharedChatExport);
     super.dispose();
   }
 
@@ -68,21 +61,16 @@ class _SettingsScreenState extends State<SettingsScreen>
 
   Future<void> _checkPermissions() async {
     final granted = await ContactService.hasPermission();
-    final notificationGranted =
-        await _captureChannel.invokeMethod<bool>('hasNotificationAccess') ??
-            false;
     final accessibilityGranted = await WhatsAppService.hasAccessibilityAccess();
+    final notificationGranted = await WhatsAppService.hasNotificationAccess();
     if (mounted) {
       setState(() {
         _contactsGranted = granted;
-        _notificationAccessGranted = notificationGranted;
         _accessibilityGranted = accessibilityGranted;
+        _notificationGranted = notificationGranted;
       });
     }
   }
-
-  static const _captureChannel =
-      MethodChannel('com.mobiwha.mobiwha/notification_capture');
 
   void _showStatus(String msg) {
     setState(() => _statusMsg = msg);
@@ -94,7 +82,6 @@ class _SettingsScreenState extends State<SettingsScreen>
   Future<void> _handleSyncContacts() async {
     setState(() => _isSyncing = true);
     final count = await ContactService.syncContacts();
-    await DatabaseService.processPendingNotifications();
     setState(() => _isSyncing = false);
 
     if (count >= 0) {
@@ -115,7 +102,7 @@ class _SettingsScreenState extends State<SettingsScreen>
     if (imported >= 0) {
       await DatabaseService.setAutoImportContactsEnabled(true);
       _showStatus(
-          'Added $imported new phone contacts to your local Leads list.');
+          'Added $imported new phone contacts to your local CRM Leads list.');
     } else {
       _showStatus('Allow Contacts access to load phone contacts.');
     }
@@ -171,285 +158,12 @@ class _SettingsScreenState extends State<SettingsScreen>
     );
   }
 
-  Future<void> _importWhatsAppChatExport() async {
-    try {
-      final export = await WhatsAppService.pickChatExport();
-      if (!mounted) return;
-      if (export == null) return;
-      await _importWhatsAppChatContent(export);
-    } on PlatformException catch (error) {
-      if (mounted) {
-        _showStatus(error.message ?? 'Could not read that chat export.');
-      }
-    } catch (error) {
-      if (mounted) _showStatus('Could not import chat export: $error');
-    }
-  }
-
-  void _handleSharedChatExport() {
-    final export = WhatsAppService.pendingSharedChatExport.value;
-    if (export == null || !mounted) return;
-    WhatsAppService.pendingSharedChatExport.value = null;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _importWhatsAppChatContent(export);
-    });
-  }
-
-  int? _suggestLeadForChatExport(String? fileName, List<Lead> leads) {
-    if (fileName == null || fileName.trim().isEmpty) return null;
-
-    var stem = fileName.trim().replaceFirst(RegExp(r'\.[^.]+$'), '');
-    const prefixes = [
-      'whatsapp chat with ',
-      'whatsapp chat - ',
-      'chat with ',
-      'whatsapp chat ',
-      'whatsapp - ',
-      'chat - ',
-    ];
-    final lowerStem = stem.toLowerCase();
-    for (final prefix in prefixes) {
-      if (lowerStem.startsWith(prefix)) {
-        stem = stem.substring(prefix.length).trim();
-        break;
-      }
-    }
-
-    String normalizeName(String value) =>
-        value.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
-
-    final normalizedStem = normalizeName(stem);
-    final matchingIds = <int>{};
-    for (final lead in leads) {
-      final id = lead.id;
-      if (id == null) continue;
-
-      if (normalizedStem.isNotEmpty &&
-          normalizeName(lead.displayName) == normalizedStem) {
-        matchingIds.add(id);
-      }
-
-      final filePhoneTokens = RegExp(r'\+?\d[\d\s().-]{5,}\d')
-          .allMatches(fileName)
-          .map((match) => match.group(0)!.replaceAll(RegExp(r'\D'), ''))
-          .where((digits) => digits.length >= 7 && digits.length <= 15);
-      final leadDigits = lead.phoneNumber.replaceAll(RegExp(r'\D'), '');
-      if (leadDigits.length >= 7 && filePhoneTokens.contains(leadDigits)) {
-        matchingIds.add(id);
-      }
-    }
-    return matchingIds.length == 1 ? matchingIds.single : null;
-  }
-
-  Future<void> _importWhatsAppChatContent(Map<String, String> export) async {
-    try {
-      final content = export['content'] ?? '';
-      final parsed = WhatsAppExportParser.parse(content);
-      if (parsed.isEmpty) {
-        _showStatus('No readable chat messages were found in that text file.');
-        return;
-      }
-      final leads = await DatabaseService.getLeads(limit: 50000);
-      if (!mounted) return;
-      if (leads.isEmpty) {
-        _showStatus('Load contacts or add a lead before importing a chat.');
-        return;
-      }
-
-      int? selectedLeadId = _suggestLeadForChatExport(export['name'], leads);
-      final datePattern = DateFormat.yMd().pattern ?? 'd/M/y';
-      var dayFirstDates = datePattern.indexOf('d') < datePattern.indexOf('M');
-      final selfNameController = TextEditingController(text: 'You');
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (dialogContext) => StatefulBuilder(
-          builder: (dialogContext, setDialogState) => AlertDialog(
-            title: const Text('Import WhatsApp chat export'),
-            content: SizedBox(
-              width: 520,
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(export['name'] ?? 'Chat export'),
-                    const SizedBox(height: 4),
-                    Builder(builder: (context) {
-                      final preview = WhatsAppExportParser.parse(
-                        content,
-                        selfName: selfNameController.text.trim().isEmpty
-                            ? 'You'
-                            : selfNameController.text.trim(),
-                        dayFirstForAmbiguousDates: dayFirstDates,
-                      );
-                      final incoming = preview
-                          .where((message) => message.direction == 'incoming')
-                          .length;
-                      final outgoing = preview.length - incoming;
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            '${preview.length} messages found • $incoming incoming • $outgoing outgoing',
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                          if (preview.isEmpty)
-                            const Padding(
-                              padding: EdgeInsets.only(top: 12),
-                              child: Text(
-                                'No messages match the selected date and sender format.',
-                              ),
-                            )
-                          else ...[
-                            const SizedBox(height: 8),
-                            const Text(
-                              'Preview',
-                              style: TextStyle(fontWeight: FontWeight.w600),
-                            ),
-                            ...preview.take(3).map((message) => Card(
-                                  margin: const EdgeInsets.only(top: 6),
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(10),
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          '${message.sender} • ${message.direction} • ${DateFormat('MMM d, yyyy h:mm a').format(DateTime.fromMillisecondsSinceEpoch(message.timestamp))}',
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .labelSmall,
-                                        ),
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          message.text,
-                                          maxLines: 3,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                )),
-                          ],
-                        ],
-                      );
-                    }),
-                    const SizedBox(height: 12),
-                    DropdownButtonFormField<int>(
-                      initialValue: selectedLeadId,
-                      isExpanded: true,
-                      decoration: const InputDecoration(
-                        labelText: 'Save this conversation under',
-                      ),
-                      items: leads
-                          .where((lead) => lead.id != null)
-                          .map((lead) => DropdownMenuItem<int>(
-                                value: lead.id,
-                                child: Text(
-                                    '${lead.displayName} • ${lead.phoneNumber}',
-                                    overflow: TextOverflow.ellipsis),
-                              ))
-                          .toList(),
-                      onChanged: (value) =>
-                          setDialogState(() => selectedLeadId = value),
-                    ),
-                    const SizedBox(height: 8),
-                    DropdownButtonFormField<bool>(
-                      initialValue: dayFirstDates,
-                      decoration: const InputDecoration(
-                        labelText: 'Order for ambiguous dates',
-                      ),
-                      items: const [
-                        DropdownMenuItem(
-                          value: true,
-                          child: Text('Day / Month / Year'),
-                        ),
-                        DropdownMenuItem(
-                          value: false,
-                          child: Text('Month / Day / Year'),
-                        ),
-                      ],
-                      onChanged: (value) {
-                        if (value != null) {
-                          setDialogState(() => dayFirstDates = value);
-                        }
-                      },
-                    ),
-                    const SizedBox(height: 8),
-                    TextField(
-                      controller: selfNameController,
-                      onChanged: (_) => setDialogState(() {}),
-                      decoration: const InputDecoration(
-                        labelText: 'Your sender name in this export',
-                        helperText:
-                            'Usually “You”; used to mark your messages outgoing.',
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'Choose the matching lead. For group exports, messages from all other participants are stored under that lead. Media files are not included in text exports.',
-                      style: TextStyle(fontSize: 12),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext, false),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                onPressed: selectedLeadId == null
-                    ? null
-                    : () => Navigator.pop(dialogContext, true),
-                child: const Text('Import messages'),
-              ),
-            ],
-          ),
-        ),
-      );
-      final selfName = selfNameController.text.trim().isEmpty
-          ? 'You'
-          : selfNameController.text.trim();
-      selfNameController.dispose();
-      if (confirmed != true || selectedLeadId == null || !mounted) return;
-
-      final classified = WhatsAppExportParser.parse(
-        content,
-        selfName: selfName,
-        dayFirstForAmbiguousDates: dayFirstDates,
-      )
-          .map((message) => (
-                sender: message.sender,
-                text: message.text,
-                direction: message.direction,
-                timestamp: message.timestamp,
-              ))
-          .toList();
-      final imported = await DatabaseService.importWhatsAppExportMessages(
-        selectedLeadId!,
-        classified,
-      );
-      if (mounted) {
-        _showStatus(
-            'Imported $imported new messages; duplicates were skipped.');
-      }
-    } on PlatformException catch (error) {
-      if (mounted) {
-        _showStatus(error.message ?? 'Could not read that chat export.');
-      }
-    } catch (error) {
-      if (mounted) _showStatus('Could not import chat export: $error');
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final fmt = DateFormat('MMM d, h:mm a');
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings & Storage')),
+      appBar: AppBar(title: const Text('Settings & Preferences')),
       body: ListView(
         padding: const EdgeInsets.symmetric(vertical: 8),
         children: [
@@ -492,7 +206,7 @@ class _SettingsScreenState extends State<SettingsScreen>
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           const Text(
-                            '100% Local & Private',
+                            '100% Local & Private CRM',
                             style: TextStyle(
                               fontWeight: FontWeight.bold,
                               fontSize: 14,
@@ -500,7 +214,7 @@ class _SettingsScreenState extends State<SettingsScreen>
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            'Matched contacts and WhatsApp notification previews are stored in your device\'s local database. No data is sent to external servers.',
+                            'All customer contacts and WhatsApp conversations remain securely stored inside your local SQLite database.',
                             style: TextStyle(
                               fontSize: 12,
                               color: Colors.grey.shade700,
@@ -516,17 +230,99 @@ class _SettingsScreenState extends State<SettingsScreen>
           ),
           const SizedBox(height: 12),
 
-          // Device Permissions Section
-          const _SettingsSectionHeader(title: 'Device Permissions'),
+          // Mobi AI & Automation
+          const _SettingsSectionHeader(title: 'Mobi AI & Broadcast Campaigns'),
+          ListTile(
+            leading: const Icon(Icons.smart_toy_rounded, color: Color(0xFF10B981)),
+            title: const Text('AI Auto-Responder'),
+            subtitle: const Text(
+              'Auto-reply to WhatsApp notifications using Gemini trained on your tone and business guidelines',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const AutoResponderScreen()),
+              );
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.campaign_rounded, color: Color(0xFF0D9488)),
+            title: const Text('Broadcast Campaigns by List'),
+            subtitle: const Text(
+              'Send messages, images, videos, audio to targeted AI customer lists',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const BroadcastScreen()),
+              );
+            },
+          ),
+          const Divider(),
+
+          // Device Permissions & WhatsApp Automation
+          const _SettingsSectionHeader(title: 'WhatsApp Automation & Permissions'),
+          ListTile(
+            leading: Icon(
+              Icons.touch_app_outlined,
+              color: _accessibilityGranted ? Colors.green : Colors.orange,
+            ),
+            title: const Text('WhatsApp Chat Reader (Accessibility)'),
+            subtitle: Text(
+              _accessibilityGranted
+                  ? 'Enabled — Mobi AI reads conversations directly from WhatsApp'
+                  : 'Required to read chat history for automated profiling',
+            ),
+            trailing: _accessibilityGranted
+                ? const Icon(Icons.check_circle, color: Colors.green)
+                : TextButton(
+                    onPressed: () async {
+                      await WhatsAppService.openAccessibilitySettings();
+                      await _checkPermissions();
+                    },
+                    child: const Text('Enable'),
+                  ),
+            onTap: () async {
+              await WhatsAppService.openAccessibilitySettings();
+              await _checkPermissions();
+            },
+          ),
+          ListTile(
+            leading: Icon(
+              Icons.notifications_active_outlined,
+              color: _notificationGranted ? Colors.green : Colors.orange,
+            ),
+            title: const Text('Background Auto-Responder (Notification Access)'),
+            subtitle: Text(
+              _notificationGranted
+                  ? 'Enabled — Mobi AI detects incoming WhatsApp notifications and replies'
+                  : 'Required for auto-responder to receive incoming messages',
+            ),
+            trailing: _notificationGranted
+                ? const Icon(Icons.check_circle, color: Colors.green)
+                : TextButton(
+                    onPressed: () async {
+                      await WhatsAppService.openNotificationAccessSettings();
+                      await _checkPermissions();
+                    },
+                    child: const Text('Enable'),
+                  ),
+            onTap: () async {
+              await WhatsAppService.openNotificationAccessSettings();
+              await _checkPermissions();
+            },
+          ),
           ListTile(
             leading: Icon(
               Icons.contacts_rounded,
               color: _contactsGranted ? Colors.green : Colors.orange,
             ),
-            title: const Text('Contacts Access'),
+            title: const Text('Phone Contacts Access'),
             subtitle: Text(
               _contactsGranted
-                  ? 'Granted — Used to cross-reference unsaved phone numbers'
+                  ? 'Granted — Used to identify unsaved numbers'
                   : 'Not Granted — Tap to request permission',
             ),
             trailing: _contactsGranted
@@ -558,9 +354,9 @@ class _SettingsScreenState extends State<SettingsScreen>
           ),
           ListTile(
             leading: const Icon(Icons.person_add_alt_1_rounded),
-            title: const Text('Load Contacts into Leads'),
+            title: const Text('Import Contacts into CRM'),
             subtitle: const Text(
-              'Copies names and phone numbers into the local lead list; existing numbers are skipped',
+              'Copies names and numbers into your CRM lead directory',
             ),
             trailing: _isImportingContacts
                 ? const SizedBox(
@@ -572,64 +368,14 @@ class _SettingsScreenState extends State<SettingsScreen>
             onTap: _isImportingContacts ? null : _handleImportContactsAsLeads,
           ),
 
-          ListTile(
-            leading: Icon(
-              Icons.notifications_active_outlined,
-              color: _notificationAccessGranted ? Colors.green : Colors.orange,
-            ),
-            title: const Text('WhatsApp Message Capture'),
-            subtitle: Text(
-              _notificationAccessGranted
-                  ? 'Enabled — incoming WhatsApp previews are saved locally'
-                  : 'Android requires you to enable notification access once',
-            ),
-            trailing: _notificationAccessGranted
-                ? const Icon(Icons.check_circle, color: Colors.green)
-                : const Icon(Icons.chevron_right),
-            onTap: () async {
-              await _captureChannel
-                  .invokeMethod<void>('openNotificationAccessSettings');
-              await _checkPermissions();
-            },
-          ),
-          ListTile(
-            leading: Icon(
-              Icons.touch_app_outlined,
-              color: _accessibilityGranted ? Colors.green : Colors.orange,
-            ),
-            title: const Text('WhatsApp Auto-Send'),
-            subtitle: Text(
-              _accessibilityGranted
-                  ? 'Enabled — bulk messages will send automatically'
-                  : 'Requires accessibility service to press send',
-            ),
-            trailing: _accessibilityGranted
-                ? const Icon(Icons.check_circle, color: Colors.green)
-                : const Icon(Icons.chevron_right),
-            onTap: () async {
-              await WhatsAppService.openAccessibilitySettings();
-              await _checkPermissions();
-            },
-          ),
-
-          const Divider(),
-
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            child: Text(
-              'MobiWA captures incoming message previews from WhatsApp and WhatsApp Business after notification access is enabled. Android controls this permission. Group summaries without a clear sender are skipped.',
-              style: TextStyle(fontSize: 12, color: Colors.black54),
-            ),
-          ),
-
           const Divider(),
 
           // Export & Import Section
-          const _SettingsSectionHeader(title: 'Export & Import'),
+          const _SettingsSectionHeader(title: 'Data Export & Import'),
           ListTile(
             leading: const Icon(Icons.file_download_outlined),
             title: const Text('Export All Leads (CSV)'),
-            subtitle: const Text('Generates spreadsheet of all recorded leads'),
+            subtitle: const Text('Generates spreadsheet of all customer leads'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () async {
               final count = await ExportService.exportLeadsToCSV();
@@ -652,28 +398,19 @@ class _SettingsScreenState extends State<SettingsScreen>
             leading: const Icon(Icons.file_upload_outlined),
             title: const Text('Import Leads from CSV'),
             subtitle:
-                const Text('Paste or import CSV rows into local database'),
+                const Text('Paste or import CSV rows into local CRM'),
             trailing: const Icon(Icons.chevron_right),
             onTap: _showImportDialog,
-          ),
-          ListTile(
-            leading: const Icon(Icons.chat_outlined),
-            title: const Text('Import WhatsApp Chat Export'),
-            subtitle: const Text(
-              'Import a plain-text .txt export into a selected lead; repeated imports skip duplicates',
-            ),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: _importWhatsAppChatExport,
           ),
 
           const Divider(),
 
-          // Danger Zone / Database Management
+          // Database Management
           const _SettingsSectionHeader(title: 'Database Management'),
           ListTile(
             leading:
                 const Icon(Icons.delete_forever_rounded, color: Colors.red),
-            title: const Text('Clear All Local Data',
+            title: const Text('Clear All Local CRM Data',
                 style: TextStyle(color: Colors.red)),
             subtitle: const Text(
                 'Permanently removes all local leads, messages, and cache'),
@@ -681,9 +418,9 @@ class _SettingsScreenState extends State<SettingsScreen>
               final confirm = await showDialog<bool>(
                 context: context,
                 builder: (_) => AlertDialog(
-                  title: const Text('Clear All Local Data?'),
+                  title: const Text('Clear All Local CRM Data?'),
                   content: const Text(
-                    'This permanently deletes local leads, messages, and the synced contacts cache. Automatic contact imports stay paused afterward; use “Load Contacts into Leads” if you want to restore them.',
+                    'This permanently deletes all local leads, messages, and cached contacts from this device. This action cannot be undone.',
                   ),
                   actions: [
                     TextButton(
@@ -707,14 +444,66 @@ class _SettingsScreenState extends State<SettingsScreen>
             },
           ),
 
-          const SizedBox(height: 24),
+          const SizedBox(height: 28),
           Center(
-            child: Text(
-              'MobiWA v1.0.0 • Local Lead Management',
-              style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
+            child: Column(
+              children: [
+                Container(
+                  width: 52,
+                  height: 52,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(14),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF10B981).withValues(alpha: 0.25),
+                        blurRadius: 16,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(14),
+                    child: Image.asset(
+                      'assets/images/logo.png',
+                      fit: BoxFit.cover,
+                      errorBuilder: (ctx, err, stack) => const Icon(
+                        Icons.auto_awesome,
+                        size: 28,
+                        color: Color(0xFF10B981),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'Mobi AI CRM',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: -0.2,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  'Autonomous WhatsApp CRM • Version 1.0.0',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: Colors.grey.shade500,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Powered by Google Gemini 2.5',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Colors.grey.shade400,
+                  ),
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 32),
         ],
       ),
     );

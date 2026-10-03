@@ -17,6 +17,12 @@ class Lead {
   final String? lastMessage;
   final int? lastMessageTime;
 
+  /// Mobi AI CRM list this customer belongs to (e.g. 'Hot Leads'). Empty = not analyzed.
+  final String aiList;
+  final String aiSummary;
+  final String aiNextAction;
+  final int? aiAnalyzedAt;
+
   Lead({
     this.id,
     required this.phoneNumber,
@@ -32,6 +38,10 @@ class Lead {
     this.messageCount = 0,
     this.lastMessage,
     this.lastMessageTime,
+    this.aiList = '',
+    this.aiSummary = '',
+    this.aiNextAction = '',
+    this.aiAnalyzedAt,
   });
 
   DateTime get createdDateTime =>
@@ -43,6 +53,24 @@ class Lead {
       : null;
 
   String get displayName => name.trim().isNotEmpty ? name.trim() : phoneNumber;
+
+  /// Dynamic CRM & product segment lists this customer belongs to
+  /// (e.g. ['Customers', 'Oil Filter Customers', 'VIP Customers'])
+  List<String> get aiLists {
+    if (aiList.trim().isEmpty) return const [];
+    return aiList
+        .split(',')
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toSet()
+        .toList();
+  }
+
+  /// Checks if this lead belongs to a specific CRM / product list
+  bool isInList(String listName) {
+    final target = listName.trim().toLowerCase();
+    return aiLists.any((l) => l.toLowerCase() == target);
+  }
 
   Map<String, dynamic> toMap() => {
         if (id != null) 'id': id,
@@ -56,6 +84,10 @@ class Lead {
         'updated_at': updatedAt,
         'whatsapp_opt_in': whatsappOptIn ? 1 : 0,
         'whatsapp_consent_updated_at': whatsappConsentUpdatedAt,
+        'ai_list': aiList,
+        'ai_summary': aiSummary,
+        'ai_next_action': aiNextAction,
+        'ai_analyzed_at': aiAnalyzedAt,
       };
 
   factory Lead.fromMap(Map<String, dynamic> map) => Lead(
@@ -73,6 +105,10 @@ class Lead {
         messageCount: (map['message_count'] as int?) ?? 0,
         lastMessage: map['last_message'] as String?,
         lastMessageTime: map['last_message_time'] as int?,
+        aiList: map['ai_list'] as String? ?? '',
+        aiSummary: map['ai_summary'] as String? ?? '',
+        aiNextAction: map['ai_next_action'] as String? ?? '',
+        aiAnalyzedAt: map['ai_analyzed_at'] as int?,
       );
 
   Lead copyWith({
@@ -90,6 +126,10 @@ class Lead {
     int? messageCount,
     String? lastMessage,
     int? lastMessageTime,
+    String? aiList,
+    String? aiSummary,
+    String? aiNextAction,
+    int? aiAnalyzedAt,
   }) =>
       Lead(
         id: id ?? this.id,
@@ -107,5 +147,9 @@ class Lead {
         messageCount: messageCount ?? this.messageCount,
         lastMessage: lastMessage ?? this.lastMessage,
         lastMessageTime: lastMessageTime ?? this.lastMessageTime,
+        aiList: aiList ?? this.aiList,
+        aiSummary: aiSummary ?? this.aiSummary,
+        aiNextAction: aiNextAction ?? this.aiNextAction,
+        aiAnalyzedAt: aiAnalyzedAt ?? this.aiAnalyzedAt,
       );
 }

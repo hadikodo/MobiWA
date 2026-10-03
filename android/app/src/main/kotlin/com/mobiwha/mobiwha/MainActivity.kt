@@ -15,12 +15,18 @@ class MainActivity : FlutterActivity() {
     private val channelName = "com.mobiwha.mobiwha/notification_capture"
     private val chatExportRequestCode = 7294
     private val multiExportRequestCode = 7295
+    private val mediaPickerRequestCode = 7296
     private var pendingChatExportResult: MethodChannel.Result? = null
     private var pendingMultiExportResult: MethodChannel.Result? = null
+    private var pendingMediaPickerResult: MethodChannel.Result? = null
+    private var pendingMediaPickerMimeType: String = "*/*"
     private var pendingSharedChatExport: Map<String, String>? = null
+
+    private var methodChannel: MethodChannel? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        instance = this
         cacheSharedChatExport(intent)
     }
 
@@ -32,15 +38,46 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
-            .setMethodCallHandler { call, result ->
+        instance = this
+        val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
+        methodChannel = channel
+        channel.setMethodCallHandler { call, result ->
                 when (call.method) {
                     "hasNotificationAccess" ->
                         result.success(WhatsAppNotificationListener.hasAccess(this))
 
                     "openNotificationAccessSettings" -> {
-                        startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
-                        result.success(null)
+                        try {
+                            val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            startActivity(intent)
+                            result.success(true)
+                        } catch (e: Exception) {
+                            try {
+                                val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                    data = Uri.fromParts("package", packageName, null)
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                startActivity(intent)
+                                result.success(true)
+                            } catch (e2: Exception) {
+                                result.error("CANNOT_OPEN_SETTINGS", e2.message, null)
+                            }
+                        }
+                    }
+
+                    "openAppDetailsSettings" -> {
+                        try {
+                            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                data = Uri.fromParts("package", packageName, null)
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            startActivity(intent)
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.error("CANNOT_OPEN_SETTINGS", e.message, null)
+                        }
                     }
 
                     "hasAccessibilityAccess" -> {
@@ -84,6 +121,12 @@ class MainActivity : FlutterActivity() {
                         val targetPkg = call.argument<String>("packageName")
                         if (!isAccessibilityServiceEnabled()) {
                             result.error("ACCESSIBILITY_DISABLED", "Accessibility service is not enabled in Android Settings.", null)
+                        } else if (!WhatsAppAccessibilityService.isServiceRunning()) {
+                            result.error(
+                                "SERVICE_NOT_RUNNING",
+                                "MobiWA accessibility service is enabled but not running. Turn it off and on again in Accessibility Settings.",
+                                null,
+                            )
                         } else if (phone.isEmpty()) {
                             result.error("INVALID_PHONE", "Phone number cannot be empty.", null)
                         } else {
@@ -174,6 +217,31 @@ class MainActivity : FlutterActivity() {
                     }
 
                     "pickMultipleChatExports" -> openMultiChatExportPicker(result)
+
+                    "sendNotificationReply" -> {
+                        val key = call.argument<String>("key")?.trim().orEmpty()
+                        val replyText = call.argument<String>("replyText")?.trim().orEmpty()
+                        if (replyText.isEmpty()) {
+                            result.error("EMPTY_REPLY", "Reply text cannot be empty.", null)
+                        } else {
+                            val listener = WhatsAppNotificationListener.instance
+                            if (listener == null) {
+                                result.success(false)
+                            } else {
+                                val sent = listener.replyToNotification(key, replyText)
+                                result.success(sent)
+                            }
+                        }
+                    }
+
+                    "isNotificationListenerRunning" -> {
+                        result.success(WhatsAppNotificationListener.instance != null)
+                    }
+
+                    "pickMediaFile" -> {
+                        val mimeType = call.argument<String>("type") ?: "*/*"
+                        openMediaPicker(mimeType, result)
+                    }
 
                     else -> result.notImplemented()
                 }
@@ -318,6 +386,25 @@ class MainActivity : FlutterActivity() {
             }
             return
         }
+
+        // Handle media picker for broadcasts
+        if (requestCode == mediaPickerRequestCode) {
+            val result = pendingMediaPickerResult ?: return
+            pendingMediaPickerResult = null
+            val uri = if (resultCode == RESULT_OK) data?.data else null
+            if (uri == null) {
+                result.success(null)
+                return
+            }
+
+            try {
+                val path = copyUriToCacheFile(uri, pendingMediaPickerMimeType)
+                result.success(path)
+            } catch (error: Exception) {
+                result.error("MEDIA_PICK_FAILED", error.message ?: "Could not process media file.", null)
+            }
+            return
+        }
     }
 
     private fun readChatExport(uri: Uri): Map<String, String> {
@@ -392,7 +479,61 @@ class MainActivity : FlutterActivity() {
         return false
     }
 
+
+    private fun openMediaPicker(mimeType: String, result: MethodChannel.Result) {
+        if (pendingMediaPickerResult != null) {
+            result.error("PICKER_BUSY", "A media picker is already open.", null)
+            return
+        }
+        pendingMediaPickerResult = result
+        pendingMediaPickerMimeType = mimeType
+        val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = mimeType
+        }
+        try {
+            startActivityForResult(intent, mediaPickerRequestCode)
+        } catch (e: Exception) {
+            pendingMediaPickerResult = null
+            result.error("PICKER_LAUNCH_FAILED", e.message ?: "Could not open media picker.", null)
+        }
+    }
+
+    private fun copyUriToCacheFile(uri: Uri, mimeType: String): String? {
+        val extension = when {
+            mimeType.startsWith("image/") -> ".jpg"
+            mimeType.startsWith("video/") -> ".mp4"
+            mimeType.startsWith("audio/") -> ".mp3"
+            else -> ""
+        }
+        val targetFile = java.io.File(cacheDir, "broadcast_media_${System.currentTimeMillis()}$extension")
+        contentResolver.openInputStream(uri)?.use { input ->
+            targetFile.outputStream().use { output ->
+                input.copyTo(output)
+            }
+        }
+        return targetFile.absolutePath
+    }
+
+    override fun onDestroy() {
+        if (instance == this) instance = null
+        methodChannel = null
+        super.onDestroy()
+    }
+
     companion object {
         private const val MAX_CHAT_EXPORT_BYTES = 15 * 1024 * 1024
+
+        var instance: MainActivity? = null
+            private set
+
+        fun notifyNotificationReceived() {
+            instance?.runOnUiThread {
+                try {
+                    instance?.methodChannel?.invokeMethod("onNotificationReceived", null)
+                } catch (_: Exception) {}
+            }
+        }
     }
 }
+

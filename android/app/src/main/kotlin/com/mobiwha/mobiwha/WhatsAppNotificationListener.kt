@@ -3,25 +3,39 @@ package com.mobiwha.mobiwha
 import android.app.Notification
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.database.sqlite.SQLiteDatabase
+import android.os.Bundle
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.provider.Settings
+import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.RemoteInput
 import java.security.MessageDigest
 import java.util.concurrent.Executors
 
-/** Stores only message previews already exposed by Android notifications. */
+/** Stores only message previews already exposed by Android notifications and handles direct AI auto-replies. */
 class WhatsAppNotificationListener : NotificationListenerService() {
     private val writer = Executors.newSingleThreadExecutor()
 
+    override fun onCreate() {
+        super.onCreate()
+        instance = this
+    }
+
     override fun onListenerConnected() {
         super.onListenerConnected()
+        instance = this
         activeNotifications.orEmpty().forEach(::captureNotification)
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         captureNotification(sbn)
+    }
+
+    override fun onNotificationRemoved(sbn: StatusBarNotification) {
+        super.onNotificationRemoved(sbn)
     }
 
     private fun captureNotification(sbn: StatusBarNotification) {
@@ -66,8 +80,28 @@ class WhatsAppNotificationListener : NotificationListenerService() {
 
                 val groupEntry = isGroup || (senderName.isNotBlank() &&
                     !senderName.equals(title, ignoreCase = true))
-                val sender = if (groupEntry) senderName else title
-                if (sender.isBlank() || sender.length > 300) continue
+                val rawSender = if (groupEntry) senderName else title
+                if (rawSender.isBlank() || rawSender.length > 300) continue
+
+                val personKey = person?.key.orEmpty()
+                val personUri = person?.uri.orEmpty()
+                val jidDigits = if (personKey.contains("@")) {
+                    personKey.substringBefore("@").filter { it.isDigit() }
+                } else {
+                    personKey.filter { it.isDigit() }
+                }
+                val uriDigits = if (personUri.startsWith("tel:")) {
+                    personUri.removePrefix("tel:").filter { it.isDigit() }
+                } else {
+                    personUri.filter { it.isDigit() }
+                }
+                val phoneDigits = if (uriDigits.length in 7..16) uriDigits else if (jidDigits.length in 7..16) jidDigits else ""
+                val sender = if (phoneDigits.isNotEmpty() && rawSender.filter { it.isDigit() }.length < 6) {
+                    "$rawSender (+$phoneDigits)"
+                } else {
+                    rawSender
+                }
+
                 enqueuePreview(sbn, title, sender, message, entry.timestamp)
             }
             return
@@ -108,7 +142,22 @@ class WhatsAppNotificationListener : NotificationListenerService() {
             .digest(keySource.toByteArray(Charsets.UTF_8))
             .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
         val uniqueKey = "$packageName|$conversation|$sender|$time|$messageHash"
-        writer.execute { savePreview(uniqueKey, packageName, sender, message, time) }
+
+        // Cache StatusBarNotification for direct auto-replies
+        synchronized(activeNotificationMap) {
+            activeNotificationMap[uniqueKey] = sbn
+            if (sender.isNotBlank()) {
+                activeNotificationMap[sender.lowercase().trim()] = sbn
+            }
+            if (conversation.isNotBlank()) {
+                activeNotificationMap[conversation.lowercase().trim()] = sbn
+            }
+        }
+
+        writer.execute {
+            savePreview(uniqueKey, packageName, sender, message, time)
+            MainActivity.notifyNotificationReceived()
+        }
     }
 
     private fun savePreview(key: String, packageName: String, sender: String, message: String, timestamp: Long) {
@@ -123,9 +172,6 @@ class WhatsAppNotificationListener : NotificationListenerService() {
                 )
                 db.execSQL("PRAGMA busy_timeout=3000")
                 if (!db.isReadOnly) {
-                    // The listener can receive notifications before Flutter has
-                    // initialized the app database. Create only its queue table;
-                    // sqflite's normal onCreate will add the remaining schema.
                     db.execSQL(
                         "CREATE TABLE IF NOT EXISTS pending_notifications (" +
                             "notification_key TEXT PRIMARY KEY, " +
@@ -142,7 +188,6 @@ class WhatsAppNotificationListener : NotificationListenerService() {
                 }
                 return
             } catch (_: Exception) {
-                // The app may be upgrading or its database may be temporarily locked.
                 if (attempt < 2) Thread.sleep(200)
             } finally {
                 db?.close()
@@ -150,7 +195,60 @@ class WhatsAppNotificationListener : NotificationListenerService() {
         }
     }
 
+    /**
+     * Sends a direct reply to the active notification via Android RemoteInput.
+     * Works seamlessly with WhatsApp and WhatsApp Business without opening the app UI.
+     */
+    fun replyToNotification(keyOrSender: String, replyText: String): Boolean {
+        val sbn = synchronized(activeNotificationMap) {
+            activeNotificationMap[keyOrSender] ?: activeNotificationMap[keyOrSender.lowercase().trim()]
+        } ?: return false
+        val notification = sbn.notification ?: return false
+
+        // 1. Try AndroidX NotificationCompat direct reply
+        val count = NotificationCompat.getActionCount(notification)
+        for (i in 0 until count) {
+            val action = NotificationCompat.getAction(notification, i) ?: continue
+            val remoteInputs = action.remoteInputs ?: continue
+            val pendingIntent = action.actionIntent ?: continue
+            for (remoteInput in remoteInputs) {
+                val intent = Intent()
+                val bundle = Bundle()
+                bundle.putCharSequence(remoteInput.resultKey, replyText)
+                RemoteInput.addResultsToIntent(arrayOf(remoteInput), intent, bundle)
+                try {
+                    pendingIntent.send(this, 0, intent)
+                    Log.d("WhatsAppNotification", "Direct reply sent successfully via NotificationCompat")
+                    return true
+                } catch (e: Exception) {
+                    Log.e("WhatsAppNotification", "Direct reply via NotificationCompat failed: ${e.message}", e)
+                }
+            }
+        }
+
+        // 2. Try platform Notification.Action direct reply
+        notification.actions?.forEach { action ->
+            val pendingIntent = action.actionIntent ?: return@forEach
+            action.remoteInputs?.forEach { remoteInput ->
+                val intent = Intent()
+                val bundle = Bundle()
+                bundle.putCharSequence(remoteInput.resultKey, replyText)
+                android.app.RemoteInput.addResultsToIntent(arrayOf(remoteInput), intent, bundle)
+                try {
+                    pendingIntent.send(this, 0, intent)
+                    Log.d("WhatsAppNotification", "Direct reply sent successfully via native Action")
+                    return true
+                } catch (e: Exception) {
+                    Log.e("WhatsAppNotification", "Direct reply via native Action failed: ${e.message}", e)
+                }
+            }
+        }
+
+        return false
+    }
+
     override fun onDestroy() {
+        instance = null
         writer.shutdown()
         super.onDestroy()
     }
@@ -158,13 +256,34 @@ class WhatsAppNotificationListener : NotificationListenerService() {
     companion object {
         private val whatsappPackages = setOf("com.whatsapp", "com.whatsapp.w4b")
 
+        var instance: WhatsAppNotificationListener? = null
+            private set
+
+        private val activeNotificationMap = object : LinkedHashMap<String, StatusBarNotification>(100, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, StatusBarNotification>?): Boolean {
+                return size > 100
+            }
+        }
+
         fun hasAccess(context: Context): Boolean {
+            try {
+                if (androidx.core.app.NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)) {
+                    return true
+                }
+            } catch (_: Exception) {}
+
             val enabled = Settings.Secure.getString(
                 context.contentResolver,
                 "enabled_notification_listeners"
             ) ?: return false
-            val component = ComponentName(context, WhatsAppNotificationListener::class.java).flattenToString()
-            return enabled.split(":").any { it.equals(component, ignoreCase = true) }
+            val component1 = ComponentName(context, WhatsAppNotificationListener::class.java).flattenToString()
+            val component2 = ComponentName(context, WhatsAppNotificationListener::class.java).flattenToShortString()
+            val pkg = context.packageName
+            return enabled.split(":").any {
+                it.equals(component1, ignoreCase = true) ||
+                it.equals(component2, ignoreCase = true) ||
+                it.startsWith("$pkg/", ignoreCase = true)
+            }
         }
     }
 }
