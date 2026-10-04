@@ -1018,6 +1018,43 @@ class DatabaseService {
     await db.update('leads', values, where: 'id = ?', whereArgs: [id]);
   }
 
+  static Future<void> batchUpdateLeadClassification(
+      List<Map<String, dynamic>> updates) async {
+    if (updates.isEmpty) return;
+    final db = await database;
+    final batch = db.batch();
+    for (final update in updates) {
+      final id = update['id'] as int;
+      final values = Map<String, dynamic>.from(update)..remove('id');
+      batch.update('leads', values, where: 'id = ?', whereArgs: [id]);
+    }
+    await batch.commit(noResult: true);
+    notifyDataChanged();
+  }
+
+  static Future<Set<String>> getAllLeadPhoneNumbers() async {
+    final db = await database;
+    final rows = await db.query('leads', columns: ['phone_number']);
+    return rows.map((r) => r['phone_number'] as String).toSet();
+  }
+
+  static Future<int> batchInsertContactsAsLeads(
+      List<Map<String, dynamic>> leadData) async {
+    if (leadData.isEmpty) return 0;
+    final db = await database;
+    final batch = db.batch();
+    for (final data in leadData) {
+      batch.insert(
+        'leads',
+        data,
+        conflictAlgorithm: ConflictAlgorithm.ignore,
+      );
+    }
+    await batch.commit(noResult: true);
+    notifyDataChanged();
+    return leadData.length;
+  }
+
   // --- Statistics & Overview ---
 
   static Future<Map<String, int>> getStats() async {

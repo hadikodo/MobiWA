@@ -66,9 +66,11 @@ class _MainNavigationShellState extends State<MainNavigationShell>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     DatabaseService.startNotificationWorker();
-    _syncLocalContacts(requestPermission: false);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       PermissionsPromptDialog.checkAndPromptIfNeeded(context);
+      Future.delayed(const Duration(seconds: 2), () {
+        if (mounted) _syncLocalContacts(requestPermission: false);
+      });
     });
   }
 
@@ -105,8 +107,10 @@ class _MainNavigationShellState extends State<MainNavigationShell>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      _refreshContactsIfStale();
       DatabaseService.processPendingNotifications();
+      Future.delayed(const Duration(seconds: 1), () {
+        if (mounted) _refreshContactsIfStale();
+      });
     }
   }
 
