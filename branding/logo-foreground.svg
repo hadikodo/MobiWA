@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Android adaptive-icon foreground: artwork inside the 66% safe zone, transparent around. -->
+  <defs>
+    <linearGradient id="spark" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#00B386"/>
+      <stop offset="1" stop-color="#00785F"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(512 512) scale(0.62) translate(-512 -490)">
+    <path d="M512 214c-171 0-306 118-306 270 0 78 36 148 95 197l-30 112c-4 15 12 27 25 19l119-68c30 7 63 11 97 11 171 0 306-118 306-271S683 214 512 214z" fill="#FFFFFF"/>
+    <path d="M553 300 412 512h86l-35 168 149-224h-90z" fill="url(#spark)"/>
+  </g>
+</svg>

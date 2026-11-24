@@ -1,111 +1,106 @@
-# MobiWA - Local Lead Management & Message Recording
+# MobiWA
 
-**MobiWA** is a local, privacy-first Android Flutter application for tracking customer leads, capturing incoming WhatsApp notification previews, and detecting unsaved phone numbers by cross-referencing device contacts.
+Turns WhatsApp chats into organised customer lists. **Going live? Read [DEPLOY.md](DEPLOY.md).**
 
-All app data is stored on-device in a local SQLite database. After the user enables Android notification access, MobiWA records incoming WhatsApp and WhatsApp Business notification previews and matches sender names against device contacts. Android requires one-time approval for both contacts and notification access. MobiWA does not access WhatsApp's private storage or decrypt backups.
+## Repository
 
----
+| Folder | What | Deploys to |
+|---|---|---|
+| `lib/`, `android/`, `web/` | Flutter app (Android + web) | Google Play `com.mobiwa.app` · **app.mobiwa.com** |
+| `landing/` | Marketing site + Privacy / Terms / account deletion (React + Vite) | **mobiwa.com** |
+| `extension/` | MobiWA Connector Chrome extension (web app ↔ WhatsApp Web) | Chrome Web Store |
+| `supabase/` | Database migrations + Edge Functions | Supabase (live) |
+| `store/` | Google Play listing texts, declarations, icon + feature graphic | Play Console |
+| `branding/` | Logo SVGs; `python branding/render.py` regenerates every icon | — |
 
-## Key Features
+On Android the automation uses the Accessibility service; on the web it uses the
+Chrome extension with WhatsApp Web. Both share one account, data and backend.
 
-1. **Local SQLite Database**:
-   - `leads`: tracks phone numbers, contact names, notes, inquiry tags, lead stages (`New`, `Contacted`, `Qualified`, `Converted`, `Archived`), and timestamps.
-   - `messages`: chronologically records incoming customer inquiries, outgoing quotations, and internal notes.
-   - `contacts_cache`: stores locally synced phone numbers and names to detect whether a lead is saved or unsaved in device contacts.
-   - `pending_notifications`: queues notification previews until a sender can be matched to a phone number.
+## What it does
 
-2. **Device Contacts Synchronization**:
-   - User-authorized reading of contacts via Android's `ContactsContract` (`flutter_contacts`).
-   - Digits-only phone matching that avoids guessing country-code conversions and merging unrelated numbers.
-   - Instant unsaved-contact classification and one-tap "Save to Phone Contacts" capability.
+Three steps:
 
-3. **Dashboard & Metrics**:
-   - Overview metrics: Total Leads, Unsaved Numbers, Messages Recorded, and Updates Today.
-   - Quick Actions: Record Lead, Sync Device Contacts, Export to CSV.
-   - Recent activity list with status chips, last inquiry snippets, and timestamps.
+1. **Get Numbers**: pick WhatsApp or WhatsApp Business. MobiWA opens it, scrolls the whole chat list, and collects every chat whose title is a phone number (a number you never saved). New numbers go into the **Unnamed** category.
+2. **AI Sort**: for each Unnamed number, MobiWA opens the chat, reads the messages, and asks Gemini whether this is a customer.
+   - Customer: filed into a category named after what they asked for (for example "iPhone Repair"). Existing categories are reused, and new ones are created when needed.
+   - Not a customer (spam, wrong number, personal and so on): moved to **Junk**.
+   - Chat couldn't be read: stays in Unnamed and is retried next time.
+3. **Send Messages**: choose recipients (categories, single contacts, typed or pasted numbers, or any mix; duplicates are removed). Write a text message or attach an image, video or PDF with an optional caption, then press Send. MobiWA opens each chat, presses Send, closes the chat, waits, and moves to the next number.
 
-4. **Search & Multi-Filter Directory**:
-   - Search across lead names, phone numbers, notes, and tags.
-   - Search across recorded message contents and transcript notes.
-   - Filter by lead status and toggle "Unsaved Only".
+While an action runs, a floating pill over WhatsApp shows the progress and has a **STOP** button. The screen stays awake for the whole run.
 
-5. **Lead Detail & Transcript Timeline**:
-   - View and update lead details, stages, and customer requirements.
-   - Chronological message history with incoming/outgoing badges.
-   - Add new message records or notes.
-   - Export individual conversation transcripts as CSV.
+## Accounts and roles
 
-6. **Data Portability & Settings**:
-   - CSV Export for all leads or unsaved leads.
-   - CSV Import for loading leads from external spreadsheets.
-   - Reset and clear local database with safety confirmations.
-7. **WhatsApp Notification Capture**:
-   - Captures incoming previews from WhatsApp and WhatsApp Business notifications.
-   - Matches phone numbers or unique sender names to local device contacts.
-   - Skips group summaries that do not identify a sender clearly.
-8. **WhatsApp Draft Queue**:
-   - Prepares personalized drafts for selected leads with recorded opt-in (`{{name}}`, `{{phone}}`).
-   - Opens one recipient at a time in WhatsApp; the user reviews and taps Send. After confirming a send, MobiWA can open the next opted-in recipient's draft directly or stop the queue.
-   - After returning, the user confirms whether the message was sent before MobiWA records it in the local transcript. MobiWA cannot verify delivery status.
-   - The selected recipients, draft, and queue position survive app restarts; an interrupted recipient is shown for recovery.
-9. **WhatsApp Chat Export Import**:
-   - Accepts a shared plain-text chat export from WhatsApp or a user-selected `.txt` file through Android's document picker.
-   - Keeps message timestamps and sender labels, classifies the configured self name as outgoing, and skips duplicate imports.
-   - The user associates the export with a lead; media attachments and WhatsApp's private database are not read.
-10. **Unmatched Preview Review**:
-    - Keeps notification previews with unknown or ambiguous senders in a review queue.
-    - Lets the user link each preview to an existing lead before saving it, avoiding silent drops or guessed contact matches.
-    - Can create a lead from a phone number the user has verified, then attach the queued preview.
+Users sign in with a **username and password**. There is no public sign-up: an admin creates every account.
 
----
+- **User**: runs the 3 steps on their own numbers and edits their own business info.
+- **Admin**: everything a user can do, plus an **Admin** tab with:
+  - **Dashboard**: totals for all users (users, numbers, customers, messages sent), a 14-day activity chart, and the top users.
+  - **Users**: add, edit, disable or delete users, set roles and reset passwords. Open any user to see their business info, totals, categories and numbers, and to manage them.
 
-## Project Structure
+## Backend (Supabase)
+
+Project `lyrsxywtqalwelbgydbc`. Everything server-side is in `supabase/`:
+
+| Piece | What it does |
+|---|---|
+| `migrations/` | Tables `profiles`, `categories`, `contacts`, `activity`. Row-level security means users see only their own rows and admins see everything. Triggers create each user's Unnamed and Junk categories. RPCs `admin_user_stats` and `admin_daily_activity` feed the dashboard. |
+| `functions/ai-classify` | Reads a chat transcript and decides customer + category or Junk, using Gemini. The key is the `GEMINI_API_KEY` **Supabase secret**, so it never ships inside the app. Optional `GEMINI_MODEL` secret to pin a model. |
+| `functions/admin-users` | Creates, updates, disables and deletes users with the service-role key (server only). Admin callers only. |
+| `config.toml` | Public sign-ups are disabled (`[auth] enable_signup = false`). Keep `[auth.email] enable_signup = true`: it controls email/password login itself. |
+
+The app ships only the **publishable** key (`lib/core/config.dart`). That key is meant to be public, because RLS protects the data.
+
+Common commands (CLI already linked):
+
+```
+supabase db push                                   # apply new migrations
+supabase functions deploy ai-classify --use-api
+supabase functions deploy admin-users --use-api
+supabase secrets set GEMINI_API_KEY=...            # rotate the Gemini key
+```
+
+Usernames without `@` are stored in Supabase Auth as `<username>@users.mobiwa.app`. The admin signs in with their email.
+
+## One-time setup on each phone
+
+1. **Accessibility**: Settings → Accessibility → Installed apps → **MobiWA Automation** → On.
+   On Android 13+ sideloaded apps may show "Restricted setting". To fix it, open App info → ⋮ → *Allow restricted settings*, then try again.
+2. Sign in, then in Settings fill in **My business** (it helps the AI decide) and your country code (so typed local numbers like `70 123 456` work).
+
+## Project layout
 
 ```
 lib/
-├── main.dart                   # Application entry point, Material 3 theme & navigation
-├── models/
-│   ├── lead.dart               # Lead entity model
-│   └── lead_message.dart       # Message and transcript history model
-├── screens/
-│   ├── home_screen.dart        # Dashboard KPI metrics and recent leads
-│   ├── unsaved_screen.dart     # Unsaved phone numbers directory & save action
-│   ├── messages_screen.dart    # Full search & filter across leads and message bodies
-│   ├── detail_screen.dart      # Lead detail, editable notes, and transcript timeline
-│   └── settings_screen.dart    # Permissions, contact sync, CSV export/import, data reset
-├── services/
-│   ├── database_service.dart   # SQLite database operations & queries
-│   ├── contact_service.dart    # Android ContactsContract synchronization
-│   └── export_service.dart     # CSV export, transcript sharing, and CSV import
-└── utils/
-    └── phone_utils.dart        # Phone normalization and variant matching
+  main.dart                    Supabase init, login gate, bottom navigation
+  core/      config.dart (Supabase URL + publishable key), theme.dart, phone.dart
+  data/      auth.dart (login, profile, admin API), db.dart (Supabase queries), models.dart, settings.dart
+  services/  native.dart (Android bridge), gemini.dart (calls ai-classify), jobs.dart (the 3 actions), app_status.dart
+  screens/   login, home, get_numbers, ai_sort, send, send_progress, contacts, category, settings
+  screens/admin/  admin_screen (dashboard + users), admin_user_screen, user_form, activity_chart
+android/app/src/main/kotlin/com/mobiwha/mobiwha/
+  MainActivity.kt                    MethodChannel "com.mobiwha/automation", media picker, contacts, device info
+  WhatsAppAccessibilityService.kt    scan / read chat / send jobs + floating Stop pill
+supabase/    migrations, Edge Functions, config
 ```
 
----
+## Notes and limits
 
-## Running the Application
+- Sending media uses WhatsApp's share intent with a `jid` extra, which opens the file straight in the recipient's chat. This depends on WhatsApp's behaviour and screen layout, so check it on your WhatsApp version after updates.
+- Unsaved-number detection relies on WhatsApp showing the phone number as the chat title. Archived chats are not scanned.
+- Bulk messaging people who did not ask for it can get a WhatsApp account limited or banned. Keep a sensible pause between messages (Settings → Sending) and message people who expect to hear from you.
 
-### Prerequisites
-- Flutter SDK (>= 3.0.0)
-- Android SDK (API Level 26+)
-- Android device or emulator (API Level 26+)
+## Develop
 
-### WhatsApp message capture
-On first launch, allow contacts access when Android asks. MobiWA syncs the phonebook into its local contact cache and seeds the Leads list from device contacts so the dashboard has real local records. In MobiWA Settings, open **WhatsApp Message Capture** and enable MobiWA in Android's notification access settings. Android requires this one-time approval. Only notification previews are captured; content WhatsApp does not show in notifications cannot be recorded.
-
-Choosing **Clear All Local Data** pauses automatic phonebook imports so the deleted Leads list does not repopulate on the next launch. Use **Load Contacts into Leads** in Settings to import contacts again and re-enable automatic seeding.
-
-### Commands
-```bash
-# Get dependencies
+```
 flutter pub get
-
-# Run static analysis
 flutter analyze
-
-# Run unit and widget test suite
 flutter test
+flutter run                      # Android phone
+flutter run -d chrome            # web app (load extension/ unpacked in that Chrome)
 
-# Run app on connected device / emulator
-flutter run
+cd landing && npm install && npm run dev   # landing page on http://localhost:5173
 ```
+
+Production builds: `flutter build appbundle --release`, `flutter build web --release --no-web-resources-cdn`,
+`cd landing && npm run build`. Details in [DEPLOY.md](DEPLOY.md).

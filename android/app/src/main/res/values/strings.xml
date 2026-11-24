@@ -1,4 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="accessibility_service_description">MobiWA uses this service to automatically scan unsaved customer phone numbers and send bulk messages.</string>
+    <string name="accessibility_service_description">MobiWA only acts inside WhatsApp when you start an action in the app: it scrolls your chat list to collect unsaved numbers, reads a chat so the AI can sort it, and presses Send for messages you prepared. A floating Stop button is shown while it works.</string>
 </resources>

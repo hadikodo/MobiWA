@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>MobiWA Connector</title>
+  <style>
+    body { margin: 0; width: 300px; font: 14px system-ui, -apple-system, 'Segoe UI', sans-serif; color: #0f1f1a; }
+    header { display: flex; align-items: center; gap: 10px; padding: 14px 16px; background: #00a884; color: #fff; }
+    header img { width: 28px; height: 28px; border-radius: 8px; background: #fff; }
+    header b { font-size: 16px; }
+    main { padding: 14px 16px; display: grid; gap: 10px; }
+    .row { display: flex; align-items: center; gap: 10px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: #9aa4b2; flex: none; }
+    .ok { background: #16a34a; } .warn { background: #f59e0b; }
+    small { color: #5b6b66; }
+    a.btn { display: block; text-align: center; padding: 10px; border-radius: 10px; text-decoration: none;
+            font-weight: 600; background: #e3f7f1; color: #007a63; }
+    a.btn.primary { background: #00a884; color: #fff; }
+  </style>
+</head>
+<body>
+  <header><img src="icons/icon-32.png" alt=""><b>MobiWA Connector</b></header>
+  <main>
+    <div class="row"><span class="dot ok"></span><span>Extension installed</span></div>
+    <div class="row"><span id="wa-dot" class="dot"></span><span id="wa-text">Checking WhatsApp Web…</span></div>
+    <small>MobiWA only acts in WhatsApp Web when you start an action in the web app.</small>
+    <a class="btn primary" href="https://app.mobiwa.com" target="_blank">Open MobiWA web app</a>
+    <a class="btn" id="open-wa" href="https://web.whatsapp.com" target="_blank">Open WhatsApp Web</a>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

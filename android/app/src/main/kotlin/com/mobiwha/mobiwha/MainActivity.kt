@@ -5,535 +5,407 @@ import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.provider.Settings
+import android.text.TextUtils
+import android.webkit.MimeTypeMap
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
-import java.io.ByteArrayOutputStream
-import java.nio.charset.StandardCharsets
+import java.io.File
 
+/**
+ * Bridge between Flutter and Android. Channel: "com.mobiwha/automation".
+ *
+ * Dart → Android: see the `when` block below.
+ * Android → Dart: onScanProgress(count), onStopRequested().
+ */
 class MainActivity : FlutterActivity() {
-    private val channelName = "com.mobiwha.mobiwha/notification_capture"
-    private val chatExportRequestCode = 7294
-    private val multiExportRequestCode = 7295
-    private val mediaPickerRequestCode = 7296
-    private var pendingChatExportResult: MethodChannel.Result? = null
-    private var pendingMultiExportResult: MethodChannel.Result? = null
-    private var pendingMediaPickerResult: MethodChannel.Result? = null
-    private var pendingMediaPickerMimeType: String = "*/*"
-    private var pendingSharedChatExport: Map<String, String>? = null
 
-    private var methodChannel: MethodChannel? = null
+    companion object {
+        private const val CHANNEL = "com.mobiwha/automation"
+        private const val PICK_MEDIA = 8101
+        private const val CONTACTS_PERMISSION = 8102
+        private const val MAX_MEDIA_BYTES = 100L * 1024 * 1024 // WhatsApp's own limit
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        instance = this
-        cacheSharedChatExport(intent)
+        private var channel: MethodChannel? = null
+
+        fun emit(method: String, args: Any?) {
+            val ch = channel ?: return
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                try { ch.invokeMethod(method, args) } catch (_: Exception) {}
+            }
+        }
     }
 
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-        cacheSharedChatExport(intent)
-    }
+    private var pendingPick: MethodChannel.Result? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        instance = this
-        val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
-        methodChannel = channel
-        channel.setMethodCallHandler { call, result ->
-                when (call.method) {
-                    "hasNotificationAccess" ->
-                        result.success(WhatsAppNotificationListener.hasAccess(this))
-
-                    "openNotificationAccessSettings" -> {
-                        try {
-                            val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).apply {
-                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            }
-                            startActivity(intent)
-                            result.success(true)
-                        } catch (e: Exception) {
-                            try {
-                                val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                                    data = Uri.fromParts("package", packageName, null)
-                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                }
-                                startActivity(intent)
-                                result.success(true)
-                            } catch (e2: Exception) {
-                                result.error("CANNOT_OPEN_SETTINGS", e2.message, null)
-                            }
-                        }
-                    }
-
-                    "openAppDetailsSettings" -> {
-                        try {
-                            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                                data = Uri.fromParts("package", packageName, null)
-                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            }
-                            startActivity(intent)
-                            result.success(true)
-                        } catch (e: Exception) {
-                            result.error("CANNOT_OPEN_SETTINGS", e.message, null)
-                        }
-                    }
-
-                    "hasAccessibilityAccess" -> {
-                        result.success(isAccessibilityServiceEnabled())
-                    }
-
-                    "openAccessibilitySettings" -> {
-                        val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        }
-                        startActivity(intent)
-                        result.success(null)
-                    }
-
-                    "getInstalledWhatsAppApps" -> {
-                        val apps = mutableListOf<Map<String, String>>()
-                        if (isPackageInstalled("com.whatsapp.w4b")) {
-                            apps.add(mapOf("packageName" to "com.whatsapp.w4b", "name" to "WhatsApp Business", "type" to "business"))
-                        }
-                        if (isPackageInstalled("com.whatsapp")) {
-                            apps.add(mapOf("packageName" to "com.whatsapp", "name" to "WhatsApp", "type" to "normal"))
-                        }
-                        result.success(apps)
-                    }
-
-                    "startAutoScanWhatsApp" -> {
-                        val targetPkg = call.argument<String>("packageName")
-                        if (!isAccessibilityServiceEnabled()) {
-                            result.error("ACCESSIBILITY_DISABLED", "Accessibility service is not enabled in Android Settings.", null)
-                        } else {
-                            WhatsAppAccessibilityService.startAutoCollecting(this@MainActivity, targetPkg) { numbers ->
-                                runOnUiThread {
-                                    result.success(numbers)
-                                }
-                            }
-                        }
-                    }
-
-                    "scrapeChatMessages" -> {
-                        val phone = call.argument<String>("phone")?.trim().orEmpty()
-                        val targetPkg = call.argument<String>("packageName")
-                        if (!isAccessibilityServiceEnabled()) {
-                            result.error("ACCESSIBILITY_DISABLED", "Accessibility service is not enabled in Android Settings.", null)
-                        } else if (!WhatsAppAccessibilityService.isServiceRunning()) {
-                            result.error(
-                                "SERVICE_NOT_RUNNING",
-                                "MobiWA accessibility service is enabled but not running. Turn it off and on again in Accessibility Settings.",
-                                null,
-                            )
-                        } else if (phone.isEmpty()) {
-                            result.error("INVALID_PHONE", "Phone number cannot be empty.", null)
-                        } else {
-                            WhatsAppAccessibilityService.scrapeCurrentChatMessages(
-                                phone = phone,
-                                targetPackage = targetPkg,
-                                context = this@MainActivity
-                            ) { messages ->
-                                runOnUiThread {
-                                    result.success(messages)
-                                }
-                            }
-                        }
-                    }
-
-                    "stopAutoScanWhatsApp" -> {
-                        WhatsAppAccessibilityService.stopAutoCollecting(this@MainActivity)
-                        result.success(true)
-                    }
-
-                    "pickWhatsAppChatExport" -> openChatExportPicker(result)
-
-                    "takeSharedWhatsAppExport" -> {
-                        result.success(pendingSharedChatExport)
-                        pendingSharedChatExport = null
-                    }
-
-                    "scanWhatsAppContacts" -> {
-                        try {
-                            val onlyUnsaved = call.argument<Boolean>("onlyUnsaved") ?: true
-                            val contacts = if (onlyUnsaved) {
-                                WhatsAppContactScanner.getUnsavedWhatsAppContacts(this@MainActivity)
-                            } else {
-                                WhatsAppContactScanner.getAllWhatsAppContacts(this@MainActivity)
-                            }
-                            val mapped = contacts.map { c ->
-                                mapOf(
-                                    "phoneNumber" to c.phoneNumber,
-                                    "displayName" to c.whatsappDisplayName,
-                                )
-                            }
-                            result.success(mapped)
-                        } catch (e: Exception) {
-                            result.error(
-                                "SCAN_FAILED",
-                                e.message ?: "Could not scan WhatsApp contacts.",
-                                null,
-                            )
-                        }
-                    }
-
-                    "openWhatsAppChat" -> {
-                        val rawPhone = call.argument<String>("phone")?.trim().orEmpty()
-                        val message = call.argument<String>("message")?.trim().orEmpty()
-                        val phone = rawPhone.filter { it.isDigit() }
-                        if (phone.length !in 8..15) {
-                            result.error(
-                                "INVALID_PHONE",
-                                "Enter a phone number with its country code.",
-                                null,
-                            )
-                        } else {
-                            val uri = Uri.Builder()
-                                .scheme("https")
-                                .authority("wa.me")
-                                .appendPath(phone)
-                                .appendQueryParameter("text", message)
-                                .build()
-                            val intent = Intent(Intent.ACTION_VIEW, uri)
-                            val isRegular = isPackageInstalled("com.whatsapp")
-                            val isBusiness = isPackageInstalled("com.whatsapp.w4b")
-                            if (isBusiness && !isRegular) {
-                                intent.setPackage("com.whatsapp.w4b")
-                            } else if (isRegular && !isBusiness) {
-                                intent.setPackage("com.whatsapp")
-                            }
-                            try {
-                                startActivity(intent)
-                                result.success(true)
-                            } catch (_: Exception) {
-                                result.error(
-                                    "WHATSAPP_UNAVAILABLE",
-                                    "Could not open WhatsApp for this number.",
-                                    null,
-                                )
-                            }
-                        }
-                    }
-
-                    "pickMultipleChatExports" -> openMultiChatExportPicker(result)
-
-                    "sendNotificationReply" -> {
-                        val key = call.argument<String>("key")?.trim().orEmpty()
-                        val replyText = call.argument<String>("replyText")?.trim().orEmpty()
-                        if (replyText.isEmpty()) {
-                            result.error("EMPTY_REPLY", "Reply text cannot be empty.", null)
-                        } else {
-                            val listener = WhatsAppNotificationListener.instance
-                            if (listener == null) {
-                                result.success(false)
-                            } else {
-                                val sent = listener.replyToNotification(key, replyText)
-                                result.success(sent)
-                            }
-                        }
-                    }
-
-                    "isNotificationListenerRunning" -> {
-                        result.success(WhatsAppNotificationListener.instance != null)
-                    }
-
-                    "pickMediaFile" -> {
-                        val mimeType = call.argument<String>("type") ?: "*/*"
-                        openMediaPicker(mimeType, result)
-                    }
-
-                    else -> result.notImplemented()
-                }
-            }
-    }
-
-    private fun openChatExportPicker(result: MethodChannel.Result) {
-        if (pendingChatExportResult != null) {
-            result.error("PICKER_BUSY", "A document picker is already open.", null)
-            return
-        }
-        pendingChatExportResult = result
-        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-            addCategory(Intent.CATEGORY_OPENABLE)
-            type = "text/plain"
-        }
-        try {
-            startActivityForResult(intent, chatExportRequestCode)
-        } catch (_: Exception) {
-            pendingChatExportResult = null
-            result.error("PICKER_UNAVAILABLE", "Could not open the document picker.", null)
-        }
-    }
-
-    private fun openMultiChatExportPicker(result: MethodChannel.Result) {
-        if (pendingMultiExportResult != null) {
-            result.error("PICKER_BUSY", "A document picker is already open.", null)
-            return
-        }
-        pendingMultiExportResult = result
-        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-            addCategory(Intent.CATEGORY_OPENABLE)
-            type = "text/plain"
-            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
-        }
-        try {
-            startActivityForResult(intent, multiExportRequestCode)
-        } catch (_: Exception) {
-            pendingMultiExportResult = null
-            result.error("PICKER_UNAVAILABLE", "Could not open the document picker.", null)
-        }
-    }
-
-    private fun cacheSharedChatExport(incoming: Intent?) {
-        if (incoming?.action != Intent.ACTION_SEND ||
-            incoming.type?.startsWith("text/") != true
-        ) return
-
-        @Suppress("DEPRECATION")
-        val extraUri = incoming.getParcelableExtra(Intent.EXTRA_STREAM) as? Uri
-        val uri = extraUri ?: incoming.clipData?.takeIf { it.itemCount > 0 }
-            ?.getItemAt(0)?.uri
-        if (uri != null) {
-            pendingSharedChatExport = try {
-                readChatExport(uri)
-            } catch (_: Exception) {
-                null
-            }
-            return
-        }
-
-        val sharedText = incoming.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
-        if (!sharedText.isNullOrBlank() &&
-            sharedText.toByteArray(Charsets.UTF_8).size <= MAX_CHAT_EXPORT_BYTES
-        ) {
-            pendingSharedChatExport = mapOf(
-                "name" to (incoming.getStringExtra(Intent.EXTRA_TITLE) ?: "WhatsApp chat export.txt"),
-                "content" to sharedText,
-            )
-        }
-    }
-
-    @Deprecated("Deprecated by Android; FlutterActivity returns document picker results here")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-
-        // Handle single-file chat export picker
-        if (requestCode == chatExportRequestCode) {
-            val result = pendingChatExportResult ?: return
-            pendingChatExportResult = null
-            val uri = if (resultCode == RESULT_OK) data?.data else null
-            if (uri == null) {
-                result.success(null)
-                return
-            }
-
-            try {
-                result.success(readChatExport(uri))
-            } catch (error: Exception) {
-                result.error(
-                    "CHAT_EXPORT_READ_FAILED",
-                    error.message ?: "Could not read the export.",
-                    null,
+        val ch = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
+        channel = ch
+        ch.setMethodCallHandler { call, result ->
+            val service = WhatsAppAccessibilityService.instance
+            when (call.method) {
+                "getInstalledApps" -> result.success(
+                    listOf(WhatsAppAccessibilityService.WA, WhatsAppAccessibilityService.WA_BUSINESS)
+                        .filter { isInstalled(it) },
                 )
-            }
-            return
-        }
 
-        // Handle multi-file chat export picker
-        if (requestCode == multiExportRequestCode) {
-            val result = pendingMultiExportResult ?: return
-            pendingMultiExportResult = null
+                "isAccessibilityEnabled" -> result.success(isAccessibilityEnabled())
 
-            if (resultCode != RESULT_OK) {
-                result.success(null)
-                return
-            }
+                // "running" | "stopped" (enabled in Settings but killed by the phone) | "off"
+                "getAccessibilityState" -> result.success(accessibilityState())
 
-            try {
-                val uris = mutableListOf<Uri>()
+                "tryRestartAccessibility" -> tryRestartAccessibility(result)
 
-                // Single selection even in multi mode
-                data?.data?.let { uris.add(it) }
+                "getDeviceInfo" -> result.success(
+                    mapOf(
+                        "id" to (Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: ""),
+                        "name" to "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}".trim(),
+                    ),
+                )
 
-                // Multiple selections
-                data?.clipData?.let { clip ->
-                    for (i in 0 until clip.itemCount) {
-                        clip.getItemAt(i).uri?.let { uris.add(it) }
-                    }
+                "isIgnoringBatteryOptimizations" -> {
+                    val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
+                    result.success(pm.isIgnoringBatteryOptimizations(packageName))
                 }
 
-                if (uris.isEmpty()) {
-                    result.success(null)
-                    return
-                }
-
-                val exports = uris.mapNotNull { uri ->
+                "requestIgnoreBatteryOptimizations" -> {
                     try {
-                        readChatExport(uri)
+                        @Suppress("BatteryLife")
+                        startActivity(
+                            Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                                .setData(Uri.parse("package:$packageName")),
+                        )
+                        result.success(true)
                     } catch (_: Exception) {
-                        null
+                        openAppDetails()
+                        result.success(false)
                     }
                 }
 
-                result.success(exports)
-            } catch (error: Exception) {
-                result.error(
-                    "MULTI_EXPORT_READ_FAILED",
-                    error.message ?: "Could not read the exports.",
-                    null,
+                "openAutostartSettings" -> result.success(openAutostartSettings())
+
+                "isXiaomi" -> result.success(
+                    android.os.Build.MANUFACTURER.lowercase().let {
+                        it.contains("xiaomi") || it.contains("redmi") || it.contains("poco")
+                    },
                 )
-            }
-            return
-        }
 
-        // Handle media picker for broadcasts
-        if (requestCode == mediaPickerRequestCode) {
-            val result = pendingMediaPickerResult ?: return
-            pendingMediaPickerResult = null
-            val uri = if (resultCode == RESULT_OK) data?.data else null
-            if (uri == null) {
-                result.success(null)
-                return
-            }
-
-            try {
-                val path = copyUriToCacheFile(uri, pendingMediaPickerMimeType)
-                result.success(path)
-            } catch (error: Exception) {
-                result.error("MEDIA_PICK_FAILED", error.message ?: "Could not process media file.", null)
-            }
-            return
-        }
-    }
-
-    private fun readChatExport(uri: Uri): Map<String, String> {
-        val content = contentResolver.openInputStream(uri)?.use { stream ->
-                val output = ByteArrayOutputStream()
-                val buffer = ByteArray(8192)
-                var totalBytes = 0
-                while (true) {
-                    val count = stream.read(buffer)
-                    if (count < 0) break
-                    totalBytes += count
-                    if (totalBytes > MAX_CHAT_EXPORT_BYTES) {
-                        throw IllegalArgumentException("Chat export is larger than 15 MB.")
-                    }
-                    output.write(buffer, 0, count)
+                "openAccessibilitySettings" -> {
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    result.success(null)
                 }
-                decodeChatExport(output.toByteArray())
-            } ?: throw IllegalArgumentException("Could not read the selected chat export.")
 
-        val name = contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-            val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-            if (nameIndex >= 0 && cursor.moveToFirst()) cursor.getString(nameIndex) else null
-        } ?: "WhatsApp chat export.txt"
-        return mapOf("name" to name, "content" to content)
-    }
+                "scanUnsaved" -> {
+                    val pkg = call.argument<String>("package") ?: WhatsAppAccessibilityService.WA
+                    if (service == null) return@setMethodCallHandler notRunning(result)
+                    service.startScan(pkg) { numbers -> runOnUiThread { result.success(numbers) } }
+                }
 
-    private fun decodeChatExport(bytes: ByteArray): String {
-        if (bytes.size >= 2) {
-            val first = bytes[0].toInt() and 0xff
-            val second = bytes[1].toInt() and 0xff
-            if (first == 0xff && second == 0xfe) {
-                return String(bytes, 2, bytes.size - 2, Charsets.UTF_16LE)
+                "readChat" -> {
+                    val phone = call.argument<String>("phone").orEmpty()
+                    val pkg = call.argument<String>("package") ?: WhatsAppAccessibilityService.WA
+                    if (service == null) return@setMethodCallHandler notRunning(result)
+                    service.startRead(phone, pkg) { data -> runOnUiThread { result.success(data) } }
+                }
+
+                "sendMessage" -> {
+                    if (service == null) return@setMethodCallHandler notRunning(result)
+                    service.startSend(
+                        phone = call.argument<String>("phone").orEmpty(),
+                        pkg = call.argument<String>("package") ?: WhatsAppAccessibilityService.WA,
+                        text = call.argument<String>("text").orEmpty(),
+                        mediaPath = call.argument<String>("mediaPath"),
+                        mimeType = call.argument<String>("mimeType"),
+                    ) { status -> runOnUiThread { result.success(status) } }
+                }
+
+                "cancelJob" -> {
+                    service?.cancelCurrentJob()
+                    result.success(null)
+                }
+
+                "showOverlay" -> {
+                    service?.showOverlay(call.argument<String>("text").orEmpty())
+                    result.success(null)
+                }
+
+                "updateOverlay" -> {
+                    service?.updateOverlay(call.argument<String>("text").orEmpty())
+                    result.success(null)
+                }
+
+                "hideOverlay" -> {
+                    service?.hideOverlay()
+                    result.success(null)
+                }
+
+                "returnToApp" -> {
+                    if (service != null) service.returnToApp() else bringToFront()
+                    result.success(null)
+                }
+
+                "openChat" -> {
+                    val digits = call.argument<String>("phone").orEmpty().filter { it.isDigit() }
+                    val pkg = call.argument<String>("package")
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://wa.me/$digits")).apply {
+                        if (pkg != null && isInstalled(pkg)) setPackage(pkg)
+                    }
+                    try {
+                        startActivity(intent); result.success(true)
+                    } catch (_: Exception) {
+                        result.success(false)
+                    }
+                }
+
+                "pickMedia" -> pickMedia(call.argument<String>("mime") ?: "*/*", result)
+
+                "hasContactsPermission" -> result.success(hasContactsPermission())
+
+                // → "granted" | "denied" | "blocked" (denied with "don't ask again")
+                "requestContactsPermission" -> requestContactsPermission(result)
+
+                "openAppSettings" -> {
+                    openAppDetails()
+                    result.success(null)
+                }
+
+                "getPhoneContacts" -> {
+                    if (!hasContactsPermission()) {
+                        result.error("NO_PERMISSION", "Allow MobiWA to read your contacts first.", null)
+                    } else {
+                        // Big address books: read off the main thread.
+                        Thread {
+                            try {
+                                val list = PhoneContacts.read(applicationContext)
+                                runOnUiThread { result.success(list) }
+                            } catch (e: Exception) {
+                                runOnUiThread {
+                                    result.error("CONTACTS_FAILED", e.message ?: "Could not read contacts.", null)
+                                }
+                            }
+                        }.start()
+                    }
+                }
+
+                else -> result.notImplemented()
             }
-            if (first == 0xfe && second == 0xff) {
-                return String(bytes, 2, bytes.size - 2, Charsets.UTF_16BE)
-            }
-        }
-        if (bytes.size >= 3 &&
-            (bytes[0].toInt() and 0xff) == 0xef &&
-            (bytes[1].toInt() and 0xff) == 0xbb &&
-            (bytes[2].toInt() and 0xff) == 0xbf
-        ) {
-            return String(bytes, 3, bytes.size - 3, StandardCharsets.UTF_8)
-        }
-        return String(bytes, StandardCharsets.UTF_8)
-    }
-
-    private fun isPackageInstalled(pkg: String): Boolean {
-        return try {
-            packageManager.getPackageInfo(pkg, 0)
-            true
-        } catch (_: Exception) {
-            false
         }
     }
 
-    private fun isAccessibilityServiceEnabled(): Boolean {
-        if (WhatsAppAccessibilityService.isServiceRunning()) return true
-        val serviceName = "$packageName/${WhatsAppAccessibilityService::class.java.name}"
-        val enabledServices = Settings.Secure.getString(
-            contentResolver,
-            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        ) ?: return false
-        val colonSplitter = android.text.TextUtils.SimpleStringSplitter(':')
-        colonSplitter.setString(enabledServices)
-        while (colonSplitter.hasNext()) {
-            val componentName = colonSplitter.next()
-            if (componentName.equals(serviceName, ignoreCase = true) || componentName.contains(WhatsAppAccessibilityService::class.java.simpleName)) {
+    private var pendingContactsPermission: MethodChannel.Result? = null
+
+    private fun hasContactsPermission(): Boolean =
+        checkSelfPermission(android.Manifest.permission.READ_CONTACTS) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    private fun requestContactsPermission(result: MethodChannel.Result) {
+        if (hasContactsPermission()) { result.success("granted"); return }
+        if (pendingContactsPermission != null) { result.success("denied"); return }
+        pendingContactsPermission = result
+        requestPermissions(arrayOf(android.Manifest.permission.READ_CONTACTS), CONTACTS_PERMISSION)
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != CONTACTS_PERMISSION) return
+        val result = pendingContactsPermission ?: return
+        pendingContactsPermission = null
+        when {
+            hasContactsPermission() -> result.success("granted")
+            // No rationale after a denial = "Don't ask again"; only Settings can fix it.
+            !shouldShowRequestPermissionRationale(android.Manifest.permission.READ_CONTACTS) ->
+                result.success("blocked")
+            else -> result.success("denied")
+        }
+    }
+
+    private fun notRunning(result: MethodChannel.Result) {
+        result.error(
+            "ACCESSIBILITY_OFF",
+            "Turn on \"MobiWA Automation\" in Accessibility settings first.",
+            null,
+        )
+    }
+
+    private fun bringToFront() {
+        packageManager.getLaunchIntentForPackage(packageName)?.apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+        }?.let { startActivity(it) }
+    }
+
+    private fun isInstalled(pkg: String): Boolean = try {
+        packageManager.getPackageInfo(pkg, 0); true
+    } catch (_: Exception) {
+        false
+    }
+
+    private fun serviceComponent(): String =
+        "$packageName/${WhatsAppAccessibilityService::class.java.name}"
+
+    private fun accessibilityState(): String = when {
+        WhatsAppAccessibilityService.isRunning() -> "running"
+        isAccessibilityEnabled() -> "stopped"
+        else -> "off"
+    }
+
+    /**
+     * Android stops binding a service that "crashed" (its process was killed)
+     * until it is switched off and on again, and MIUI even removes it from the
+     * enabled list on force-stop / reinstall. With WRITE_SECURE_SETTINGS
+     * (granted once over adb) we re-enable it ourselves — only if the user had
+     * switched it on before.
+     */
+    private fun tryRestartAccessibility(result: MethodChannel.Result) {
+        if (WhatsAppAccessibilityService.isRunning()) { result.success(true); return }
+        val granted = checkSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (!granted) { result.success(false); return }
+        // Only bring back what the user had switched on before.
+        val wanted = getSharedPreferences("mobiwa_native", MODE_PRIVATE)
+            .getBoolean("automation_wanted", false)
+        if (!wanted) { result.success(false); return }
+        try {
+            val key = Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+            val me = serviceComponent()
+            val others = (Settings.Secure.getString(contentResolver, key) ?: "")
+                .split(':').filter { it.isNotBlank() && !it.equals(me, ignoreCase = true) }
+            Settings.Secure.putString(contentResolver, key, others.joinToString(":"))
+            android.os.Handler(mainLooper).postDelayed({
+                try {
+                    Settings.Secure.putString(contentResolver, key, (others + me).joinToString(":"))
+                    Settings.Secure.putInt(contentResolver, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
+                } catch (_: Exception) {}
+                // Give the system a moment to bind the service again.
+                android.os.Handler(mainLooper).postDelayed({
+                    result.success(WhatsAppAccessibilityService.isRunning())
+                }, 1500)
+            }, 400)
+        } catch (e: Exception) {
+            result.success(false)
+        }
+    }
+
+    private fun openAppDetails() {
+        try {
+            startActivity(
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                    .setData(Uri.fromParts("package", packageName, null))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        } catch (_: Exception) {}
+    }
+
+    /** Xiaomi / Redmi / POCO autostart screen, falling back to App info. */
+    private fun openAutostartSettings(): Boolean {
+        val candidates = listOf(
+            Intent().setClassName(
+                "com.miui.securitycenter",
+                "com.miui.permcenter.autostart.AutoStartManagementActivity",
+            ),
+            Intent("miui.intent.action.OP_AUTO_START").addCategory(Intent.CATEGORY_DEFAULT),
+            Intent("miui.intent.action.APP_PERM_EDITOR")
+                .setClassName("com.miui.securitycenter", "com.miui.permcenter.permissions.PermissionsEditorActivity")
+                .putExtra("extra_pkgname", packageName),
+        )
+        for (intent in candidates) {
+            try {
+                startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                 return true
-            }
+            } catch (_: Exception) {}
         }
+        openAppDetails()
         return false
     }
 
+    private fun isAccessibilityEnabled(): Boolean {
+        if (WhatsAppAccessibilityService.isRunning()) return true
+        val expected = "$packageName/${WhatsAppAccessibilityService::class.java.name}"
+        val enabled = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
+            ?: return false
+        val splitter = TextUtils.SimpleStringSplitter(':').apply { setString(enabled) }
+        for (entry in splitter) if (entry.equals(expected, ignoreCase = true)) return true
+        return false
+    }
 
-    private fun openMediaPicker(mimeType: String, result: MethodChannel.Result) {
-        if (pendingMediaPickerResult != null) {
-            result.error("PICKER_BUSY", "A media picker is already open.", null)
-            return
+    // ---------------------------------------------------------------------
+    // Media picker: copies the chosen file into app storage so it can be
+    // shared to WhatsApp for every recipient of a campaign.
+    // ---------------------------------------------------------------------
+
+    private fun pickMedia(mime: String, result: MethodChannel.Result) {
+        if (pendingPick != null) {
+            result.error("PICKER_BUSY", "A file picker is already open.", null); return
         }
-        pendingMediaPickerResult = result
-        pendingMediaPickerMimeType = mimeType
-        val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+        pendingPick = result
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
-            type = mimeType
+            type = mime
         }
         try {
-            startActivityForResult(intent, mediaPickerRequestCode)
+            @Suppress("DEPRECATION")
+            startActivityForResult(intent, PICK_MEDIA)
         } catch (e: Exception) {
-            pendingMediaPickerResult = null
-            result.error("PICKER_LAUNCH_FAILED", e.message ?: "Could not open media picker.", null)
+            pendingPick = null
+            result.error("PICKER_UNAVAILABLE", "Could not open the file picker.", null)
         }
     }
 
-    private fun copyUriToCacheFile(uri: Uri, mimeType: String): String? {
-        val extension = when {
-            mimeType.startsWith("image/") -> ".jpg"
-            mimeType.startsWith("video/") -> ".mp4"
-            mimeType.startsWith("audio/") -> ".mp3"
-            else -> ""
+    @Deprecated("FlutterActivity still delivers picker results here")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != PICK_MEDIA) return
+        val result = pendingPick ?: return
+        pendingPick = null
+        val uri = if (resultCode == RESULT_OK) data?.data else null
+        if (uri == null) { result.success(null); return }
+        try {
+            result.success(copyToMediaDir(uri))
+        } catch (e: Exception) {
+            result.error("MEDIA_COPY_FAILED", e.message ?: "Could not read the file.", null)
         }
-        val targetFile = java.io.File(cacheDir, "broadcast_media_${System.currentTimeMillis()}$extension")
-        contentResolver.openInputStream(uri)?.use { input ->
-            targetFile.outputStream().use { output ->
-                input.copyTo(output)
+    }
+
+    private fun copyToMediaDir(uri: Uri): Map<String, Any> {
+        val mime = contentResolver.getType(uri) ?: "application/octet-stream"
+        var name = "file"
+        var size = -1L
+        contentResolver.query(uri, null, null, null, null)?.use { c ->
+            if (c.moveToFirst()) {
+                c.getColumnIndex(OpenableColumns.DISPLAY_NAME).takeIf { it >= 0 }?.let { name = c.getString(it) ?: name }
+                c.getColumnIndex(OpenableColumns.SIZE).takeIf { it >= 0 }?.let { size = c.getLong(it) }
             }
         }
-        return targetFile.absolutePath
+        if (size > MAX_MEDIA_BYTES) throw IllegalArgumentException("File is larger than 100 MB.")
+
+        val dir = File(filesDir, "send_media").apply { mkdirs() }
+        // Keep the folder small: drop files older than 30 days.
+        val cutoff = System.currentTimeMillis() - 30L * 24 * 60 * 60 * 1000
+        dir.listFiles()?.filter { it.lastModified() < cutoff }?.forEach { it.delete() }
+
+        val ext = MimeTypeMap.getSingleton().getExtensionFromMimeType(mime)
+            ?: name.substringAfterLast('.', "bin")
+        val safeBase = name.substringBeforeLast('.').replace(Regex("[^A-Za-z0-9_\\-]"), "_").take(40)
+        val target = File(dir, "${System.currentTimeMillis()}_$safeBase.$ext")
+        contentResolver.openInputStream(uri)?.use { input ->
+            target.outputStream().use { input.copyTo(it) }
+        } ?: throw IllegalArgumentException("Could not read the file.")
+
+        return mapOf(
+            "path" to target.absolutePath,
+            "name" to name,
+            "mime" to mime,
+            "size" to target.length(),
+        )
     }
 
     override fun onDestroy() {
-        if (instance == this) instance = null
-        methodChannel = null
+        channel?.setMethodCallHandler(null)
+        channel = null
         super.onDestroy()
     }
-
-    companion object {
-        private const val MAX_CHAT_EXPORT_BYTES = 15 * 1024 * 1024
-
-        var instance: MainActivity? = null
-            private set
-
-        fun notifyNotificationReceived() {
-            instance?.runOnUiThread {
-                try {
-                    instance?.methodChannel?.invokeMethod("onNotificationReceived", null)
-                } catch (_: Exception) {}
-            }
-        }
-    }
 }
-

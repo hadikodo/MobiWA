@@ -1,0 +1,23 @@
+# Netlify / Cloudflare Pages headers for app.mobiwa.com (copied into build/web).
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Frame-Options: DENY
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+
+# Always fetch the newest app code.
+/
+  Cache-Control: no-cache
+/index.html
+  Cache-Control: no-cache
+/flutter_bootstrap.js
+  Cache-Control: no-cache
+/flutter_service_worker.js
+  Cache-Control: no-cache
+/main.dart.js
+  Cache-Control: no-cache
+/version.json
+  Cache-Control: no-cache
+
+/canvaskit/*
+  Cache-Control: public, max-age=31536000, immutable

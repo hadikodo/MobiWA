@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <!-- Replaced by `flutter build web --base-href`. app.mobiwa.com serves from "/". -->
+  <base href="$FLUTTER_BASE_HREF">
+
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MobiWA web app — collect WhatsApp numbers, sort customers with AI and send offers with WhatsApp Web.">
+  <meta name="theme-color" content="#00A884">
+  <meta name="robots" content="noindex">
+
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="MobiWA">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+  <link rel="icon" type="image/png" href="favicon.png"/>
+
+  <title>MobiWA</title>
+  <link rel="manifest" href="manifest.json">
+
+  <style>
+    /* Branded splash shown while Flutter loads. */
+    html, body { margin: 0; height: 100%; background: #f6f8f7; }
+    @media (prefers-color-scheme: dark) { html, body { background: #0f1417; } }
+    #splash { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
+              justify-content: center; gap: 18px; font-family: system-ui, sans-serif; color: #5b6b66; }
+    #splash img { width: 72px; height: 72px; animation: pulse 1.4s ease-in-out infinite; }
+    @keyframes pulse { 50% { transform: scale(0.92); opacity: .8; } }
+  </style>
+</head>
+<body>
+  <div id="splash"><img src="icons/Icon-192.png" alt="MobiWA"><span>Loading MobiWA…</span></div>
+  <script>
+    // Remove the splash once Flutter has rendered its first frame.
+    window.addEventListener('flutter-first-frame', function () {
+      var s = document.getElementById('splash'); if (s) s.remove();
+    });
+  </script>
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>

@@ -1,3 +1,6 @@
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
@@ -5,8 +8,19 @@ plugins {
 }
 
 dependencies {
-    // Parses MessagingStyle notifications on the full Android 8+ minSdk range.
+    // FileProvider (sharing picked media with WhatsApp).
     implementation("androidx.core:core:1.13.1")
+}
+
+// Release signing: android/key.properties (not in git) points to the upload keystore.
+//   storeFile=../upload-keystore.jks
+//   storePassword=...
+//   keyAlias=upload
+//   keyPassword=...
+val keystoreProperties = Properties()
+val keystorePropertiesFile = rootProject.file("key.properties")
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
 
 android {
@@ -20,21 +34,46 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.mobiwha.mobiwha"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
+        // Play Store id — permanent once the app is published.
+        applicationId = "com.mobiwa.app"
         minSdk = 26
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (keystorePropertiesFile.exists()) {
+            create("release") {
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+                storeFile = file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String
+            }
+        }
+    }
+
+    lint {
+        // Release lint runs by default. Set MOBIWA_SKIP_LINT_VITAL=1 only when the
+        // local JDK can't run lint (e.g. a damaged Android Studio JBR without awt.dll).
+        checkReleaseBuilds = System.getenv("MOBIWA_SKIP_LINT_VITAL") == null
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            // Without key.properties the build falls back to debug signing
+            // (fine for testing, NOT accepted by Google Play).
+            signingConfig = if (keystorePropertiesFile.exists()) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
 }
