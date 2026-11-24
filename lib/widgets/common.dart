@@ -260,7 +260,7 @@ class SetupCard extends StatelessWidget {
       _SetupRow(
         done: hasExtension,
         title: 'Install the MobiWA Connector',
-        hint: 'Chrome extension that works inside WhatsApp Web. Reload this page after installing.',
+        hint: 'Free browser extension that works inside WhatsApp Web. Reload this page after installing.',
         action: hasExtension
             ? null
             : const FilledButton.tonal(

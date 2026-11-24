@@ -4,7 +4,6 @@ import ContactForm from '../components/ContactForm';
 import PhoneMockup from '../components/PhoneMockup';
 import PlayButton from '../components/PlayButton';
 import {
-  Chart,
   Check,
   Clock,
   Contacts,
@@ -20,7 +19,6 @@ import {
   Shield,
   Sparkles,
   Store,
-  Users,
 } from '../components/Icons';
 
 const steps = [
@@ -64,16 +62,16 @@ const features = [
     text: 'Sort or message contacts from your phone book, filtered to the ones that use WhatsApp.',
   },
   {
-    icon: <Users size={24} color="#f97316" />,
+    icon: <Globe size={24} color="#f97316" />,
     bg: '#feeee2',
-    title: 'Team accounts',
-    text: 'Create an account for each salesperson. Each one works on their own phone; admins see everything.',
+    title: 'Phone or computer',
+    text: 'Use the Android app on the go, or open app.mobiwa.com on your computer — same account, same customers.',
   },
   {
-    icon: <Chart size={24} color="#0ea5e9" />,
+    icon: <Clock size={24} color="#0ea5e9" />,
     bg: '#e0f4fd',
-    title: 'Admin dashboard',
-    text: 'Numbers collected, customers found and messages sent — per user and per day.',
+    title: 'Safe, paced sending',
+    text: 'A pause between messages that you control, live progress for every number, and a STOP button at any time.',
   },
   {
     icon: <Shield size={24} color="#16a34a" />,
@@ -86,7 +84,7 @@ const features = [
 const faqs = [
   {
     q: 'Do I need WhatsApp Business?',
-    a: 'No. MobiWA works with WhatsApp and WhatsApp Business on Android. You choose which one at the start of each action. The web app works with WhatsApp Web.',
+    a: 'No. MobiWA works with WhatsApp and WhatsApp Business. You choose which one at the start of each action.',
   },
   {
     q: 'What does the AI read, and is it stored?',
@@ -101,12 +99,12 @@ const faqs = [
     a: 'Yes, if you message many people who do not expect it. Only message customers who contacted you or agreed to hear from you, keep a pause between messages (adjustable in Settings), and respect opt-outs. See our Terms of Service.',
   },
   {
-    q: 'Can my sales team use it?',
-    a: 'Yes. An admin creates accounts for each person. Each account can be signed in on one phone at a time, and the admin can sign anyone out remotely.',
+    q: 'Does it work on a computer?',
+    a: 'Yes — install the free MobiWA Connector extension in Chrome or Edge, keep WhatsApp Web open, and sign in at app.mobiwa.com with the same account. The same three steps work there.',
   },
   {
-    q: 'Does it work on a computer?',
-    a: 'Yes — open the web app at app.mobiwa.com in Chrome, install the free MobiWA Connector extension, and keep WhatsApp Web open. The same three steps work there.',
+    q: 'Can I use my account on two devices?',
+    a: 'One account is signed in on one device at a time. Sign out on one device (Settings → Sign out) before signing in on another.',
   },
 ];
 
@@ -253,8 +251,8 @@ export default function Home() {
                 <li>
                   <Check size={20} color="#00a884" />
                   <div>
-                    <b>Your whole team, one view</b>
-                    <span>Accounts for each salesperson and a dashboard for the owner.</span>
+                    <b>On your phone or computer</b>
+                    <span>Work from the Android app or app.mobiwa.com — your customers are on both.</span>
                   </div>
                 </li>
               </ul>
@@ -323,8 +321,8 @@ export default function Home() {
               </div>
               <h3>Web app</h3>
               <p>
-                Open <b>app.mobiwa.com</b> in Chrome with the free MobiWA Connector extension and WhatsApp Web. Great
-                for big campaigns from your desk.
+                Open <b>app.mobiwa.com</b> in Chrome or Edge with the free MobiWA Connector extension and WhatsApp
+                Web. Great for big campaigns from your desk.
               </p>
               <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 'auto' }}>
                 <a className="btn btn-primary" href={site.appUrl}>
@@ -375,8 +373,8 @@ export default function Home() {
             <div className="eyebrow">Contact us</div>
             <h2>Let’s talk about your store</h2>
             <p>
-              Want accounts for your team, a demo, or help with the app? Send us a message and we’ll get back to you
-              within one business day.
+              Want to start using MobiWA in your store, see a demo, or need help with the app? Send us a message and
+              we’ll get back to you within one business day.
             </p>
             <div className="contact-lines">
               <a href={`mailto:${site.salesEmail}`}>

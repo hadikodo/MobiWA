@@ -1,11 +1,13 @@
 # Going to production
 
+> Security: read **[SECURITY.md](SECURITY.md)** first — especially the admin two-step verification.
+
 | What | Where | Source | Host |
 |---|---|---|---|
 | Landing page | **mobiwa.com** | `landing/` (React + Vite) | Vercel / Netlify / Cloudflare Pages |
 | Web app | **app.mobiwa.com** | this Flutter project, `flutter build web` | Vercel / Netlify / Cloudflare Pages |
 | Android app | Google Play `com.mobiwa.app` | this Flutter project, `flutter build appbundle` | Google Play Console |
-| Chrome extension | Chrome Web Store | `extension/` | Chrome Web Store |
+| MobiWA Connector (browser extension) | Chrome Web Store (public) | `extension/` | Chrome Web Store |
 | Backend | Supabase project `lyrsxywtqalwelbgydbc` | `supabase/` | Supabase (already live) |
 
 ---
@@ -59,7 +61,7 @@ add the two env vars → Deploy → Domains: add `mobiwa.com` and `www.mobiwa.co
 **Netlify / Cloudflare Pages:** build command `npm run build`, output `dist`, base `landing`.
 (`public/_redirects` and `public/_headers` are included.)
 
-Check after deploy: `/`, `/privacy`, `/terms`, `/delete-account`, `/extension`, and send a test
+Check after deploy: `/`, `/privacy`, `/terms`, `/delete-account`, and send a test
 message with the contact form → it appears in the app under **Admin → Inbox**.
 
 ---
@@ -74,7 +76,8 @@ Deploy the **`build/web`** folder:
   domain `app.mobiwa.com`. `vercel.json` (copied from `web/`) sets caching + headers.
 - **Netlify / Cloudflare Pages:** drag-and-drop or CLI-deploy `build/web`; `_headers` is included.
 
-The web app needs the **MobiWA Connector** extension + an open WhatsApp Web tab (see §5).
+The web app needs the **MobiWA Connector** extension + an open WhatsApp Web tab (see §5);
+mobiwa.com/extension explains the setup to users.
 Accounts are shared with Android; one account can be signed in on **one device at a time**
 (a browser counts as a device).
 
@@ -86,7 +89,8 @@ Signing is set up: `android/upload-keystore.jks` + `android/key.properties` (git
 **Back both up** (password manager / safe storage) — without them you can't publish updates.
 
 ```bash
-flutter build appbundle --release     # → build/app/outputs/bundle/release/app-release.aab
+flutter build appbundle --release --obfuscate --split-debug-info=build/symbols
+# → build/app/outputs/bundle/release/app-release.aab   (keep build/symbols to read crash reports)
 ```
 
 > **This PC:** Android Studio's bundled Java is missing `awt.dll`, which makes the release
@@ -112,11 +116,13 @@ auto-restoring the automation after the phone kills it (support/IT only):
 
 ---
 
-## 5. Chrome extension → Chrome Web Store
+## 5. MobiWA Connector → Chrome Web Store (public)
 
-See **`extension/README.md`** (zip, upload, privacy answers). After approval, set
-`site.chromeExtensionUrl` in `landing/src/config.ts` and redeploy the landing page — the
-web app's "Install" button opens `mobiwa.com/extension`, which then links to the store.
+Publish it as described in **`extension/README.md`** (zip, upload, privacy answers, visibility
+**Public**). After approval put the store link in `landing/src/config.ts` →
+`site.chromeExtensionUrl` and redeploy the landing page: mobiwa.com/extension and the web app's
+**Install** button then lead users to it. Microsoft Edge users can install from the Chrome Web
+Store too (or publish the same zip on Edge Add-ons).
 
 ---
 
@@ -137,7 +143,9 @@ web app's "Install" button opens `mobiwa.com/extension`, which then links to the
 - [ ] support@ / privacy@ / sales@ mailboxes working
 - [ ] Supabase on a paid plan, backups on, admin password changed
 - [ ] mobiwa.com live: all pages + contact form → Admin → Inbox
+- [ ] Extension published (Public), store link set in `landing/src/config.ts`, landing redeployed
 - [ ] app.mobiwa.com live, sign-in works, extension detected
+- [ ] **Admin two-step verification set up** and admin password changed (see SECURITY.md)
 - [ ] Extension published, store URL set on the landing page
 - [ ] Play: internal testing done on a real phone (all 3 actions, text + image + video + PDF)
 - [ ] Play: listing, Data safety, Accessibility declaration, account deletion URL submitted

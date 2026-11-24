@@ -13,7 +13,7 @@ const topics: { value: Topic; label: string }[] = [
 
 /**
  * Sends to the Supabase table `contact_messages` (insert-only for visitors;
- * admins read it in the app's Admin → Inbox). Falls back to email if the
+ * the MobiWA team reads it in the app's Admin → Inbox). Falls back to email if the
  * request fails.
  */
 export default function ContactForm({ defaultTopic = 'sales' }: { defaultTopic?: Topic }) {

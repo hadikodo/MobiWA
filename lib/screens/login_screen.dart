@@ -20,8 +20,10 @@ class _LoginScreenState extends State<LoginScreen> {
   final _form = GlobalKey<FormState>();
   final _user = TextEditingController();
   final _pass = TextEditingController();
+  final _code = TextEditingController();
   bool _hide = true;
   bool _busy = false;
+  bool _needCode = false; // password OK, authenticator code required
   String? _error;
 
   @override
@@ -34,6 +36,7 @@ class _LoginScreenState extends State<LoginScreen> {
   void dispose() {
     _user.dispose();
     _pass.dispose();
+    _code.dispose();
     super.dispose();
   }
 
@@ -44,12 +47,30 @@ class _LoginScreenState extends State<LoginScreen> {
       _error = null;
     });
     try {
-      await Auth.signIn(_user.text, _pass.text);
-      // AuthGate switches to the app.
+      if (_needCode) {
+        await Auth.completeSignIn(_code.text);
+      } else if (await Auth.signIn(_user.text, _pass.text)) {
+        if (mounted) setState(() => _needCode = true);
+      }
+      // When fully signed in, AuthGate switches to the app.
     } catch (e) {
-      if (mounted) setState(() => _error = Job.friendlyError(e));
+      if (mounted) {
+        setState(() => _error = Job.friendlyError(e));
+        _code.clear();
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _cancelCode() async {
+    await Auth.signOut(release: false);
+    if (mounted) {
+      setState(() {
+        _needCode = false;
+        _code.clear();
+        _error = null;
+      });
     }
   }
 
@@ -78,7 +99,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           textAlign: TextAlign.center,
                           style: t.headlineSmall?.copyWith(fontWeight: FontWeight.w800)),
                       const SizedBox(height: 6),
-                      Text('Sign in with the username and password from your admin.',
+                      Text('Sign in with the username and password you received from MobiWA.',
                           textAlign: TextAlign.center,
                           style: TextStyle(color: cs.onSurfaceVariant)),
                       const SizedBox(height: 32),
@@ -97,35 +118,61 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                         const SizedBox(height: 16),
                       ],
-                      TextFormField(
-                        controller: _user,
-                        autofillHints: const [AutofillHints.username],
-                        keyboardType: TextInputType.emailAddress,
-                        autocorrect: false,
-                        textInputAction: TextInputAction.next,
-                        decoration: const InputDecoration(
-                          labelText: 'Username',
-                          prefixIcon: Icon(Icons.person_outline_rounded),
+                      if (_needCode) ...[
+                        // Step 2: two-step verification.
+                        const Icon(Icons.verified_user_outlined, size: 32, color: AppColors.brand),
+                        const SizedBox(height: 8),
+                        const Text('Enter the 6-digit code from your authenticator app.',
+                            textAlign: TextAlign.center),
+                        const SizedBox(height: 14),
+                        TextFormField(
+                          controller: _code,
+                          autofocus: true,
+                          keyboardType: TextInputType.number,
+                          autofillHints: const [AutofillHints.oneTimeCode],
+                          maxLength: 6,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                              fontSize: 24, letterSpacing: 8, fontWeight: FontWeight.w700),
+                          decoration: const InputDecoration(counterText: '', hintText: '••••••'),
+                          onFieldSubmitted: (_) => _submit(),
+                          validator: (v) => RegExp(r'^\d{6}$').hasMatch((v ?? '').trim())
+                              ? null
+                              : 'Enter the 6 digits',
                         ),
-                        validator: (v) => (v ?? '').trim().isEmpty ? 'Enter your username' : null,
-                      ),
-                      const SizedBox(height: 14),
-                      TextFormField(
-                        controller: _pass,
-                        obscureText: _hide,
-                        autofillHints: const [AutofillHints.password],
-                        textInputAction: TextInputAction.done,
-                        onFieldSubmitted: (_) => _submit(),
-                        decoration: InputDecoration(
-                          labelText: 'Password',
-                          prefixIcon: const Icon(Icons.lock_outline_rounded),
-                          suffixIcon: IconButton(
-                            onPressed: () => setState(() => _hide = !_hide),
-                            icon: Icon(_hide ? Icons.visibility_outlined : Icons.visibility_off_outlined),
+                      ] else ...[
+                        TextFormField(
+                          controller: _user,
+                          autofillHints: const [AutofillHints.username],
+                          keyboardType: TextInputType.emailAddress,
+                          autocorrect: false,
+                          textInputAction: TextInputAction.next,
+                          decoration: const InputDecoration(
+                            labelText: 'Username',
+                            prefixIcon: Icon(Icons.person_outline_rounded),
                           ),
+                          validator: (v) => (v ?? '').trim().isEmpty ? 'Enter your username' : null,
                         ),
-                        validator: (v) => (v ?? '').isEmpty ? 'Enter your password' : null,
-                      ),
+                        const SizedBox(height: 14),
+                        TextFormField(
+                          controller: _pass,
+                          obscureText: _hide,
+                          autofillHints: const [AutofillHints.password],
+                          textInputAction: TextInputAction.done,
+                          onFieldSubmitted: (_) => _submit(),
+                          decoration: InputDecoration(
+                            labelText: 'Password',
+                            prefixIcon: const Icon(Icons.lock_outline_rounded),
+                            suffixIcon: IconButton(
+                              onPressed: () => setState(() => _hide = !_hide),
+                              icon: Icon(_hide
+                                  ? Icons.visibility_outlined
+                                  : Icons.visibility_off_outlined),
+                            ),
+                          ),
+                          validator: (v) => (v ?? '').isEmpty ? 'Enter your password' : null,
+                        ),
+                      ],
                       const SizedBox(height: 24),
                       FilledButton(
                         onPressed: _busy ? null : _submit,
@@ -135,8 +182,13 @@ class _LoginScreenState extends State<LoginScreen> {
                                 height: 22,
                                 child: CircularProgressIndicator(strokeWidth: 2.5),
                               )
-                            : const Text('Sign in'),
+                            : Text(_needCode ? 'Verify' : 'Sign in'),
                       ),
+                      if (_needCode)
+                        TextButton(
+                          onPressed: _busy ? null : _cancelCode,
+                          child: const Text('Back'),
+                        ),
                       const SizedBox(height: 20),
                       Text(
                         'By signing in you agree to our',

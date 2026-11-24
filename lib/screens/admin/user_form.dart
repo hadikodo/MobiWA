@@ -96,7 +96,10 @@ class _UserFormState extends State<_UserForm> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text(_isEdit ? 'Edit user' : 'Add user',
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800)),
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleLarge
+                      ?.copyWith(fontWeight: FontWeight.w800)),
               const SizedBox(height: 16),
               if (_error != null) ...[
                 Text(_error!, style: TextStyle(color: cs.error)),
@@ -124,7 +127,9 @@ class _UserFormState extends State<_UserForm> {
                 autocorrect: false,
                 decoration: InputDecoration(
                   labelText: _isEdit ? 'New password' : 'Password',
-                  helperText: _isEdit ? 'Leave empty to keep the current password' : 'At least 8 characters',
+                  helperText: _isEdit
+                      ? 'Leave empty to keep the current password'
+                      : '10+ characters, letters and numbers',
                   suffixIcon: IconButton(
                     onPressed: () => setState(() => _hide = !_hide),
                     icon: Icon(_hide ? Icons.visibility_outlined : Icons.visibility_off_outlined),
@@ -133,7 +138,11 @@ class _UserFormState extends State<_UserForm> {
                 validator: (v) {
                   final s = v ?? '';
                   if (_isEdit && s.isEmpty) return null;
-                  return s.length < 8 ? 'At least 8 characters' : null;
+                  if (s.length < 10) return 'At least 10 characters';
+                  if (!RegExp(r'[A-Za-z]').hasMatch(s) || !RegExp(r'\d').hasMatch(s)) {
+                    return 'Use letters and numbers';
+                  }
+                  return null;
                 },
               ),
               const SizedBox(height: 12),
@@ -148,7 +157,9 @@ class _UserFormState extends State<_UserForm> {
               SegmentedButton<Role>(
                 segments: const [
                   ButtonSegment(
-                      value: Role.user, icon: Icon(Icons.person_outline_rounded), label: Text('User')),
+                      value: Role.user,
+                      icon: Icon(Icons.person_outline_rounded),
+                      label: Text('User')),
                   ButtonSegment(
                       value: Role.admin,
                       icon: Icon(Icons.admin_panel_settings_outlined),

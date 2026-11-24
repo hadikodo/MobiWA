@@ -31,13 +31,28 @@ class Auth {
 
   /// Password check, then claims the account for this phone.
   /// Fails if the account is already signed in on another phone.
-  static Future<void> signIn(String username, String password) async {
+  ///
+  /// Returns true when the account has two-step verification: the caller must
+  /// then ask for the authenticator code and call [completeSignIn].
+  static Future<bool> signIn(String username, String password) async {
     signOutReason.value = null;
     try {
       await _sb.auth.signInWithPassword(email: emailFor(username), password: password);
     } on AuthException catch (e) {
       throw Exception(_friendly(e));
     }
+    if (needsMfaCode) return true;
+    await _finishSignIn();
+    return false;
+  }
+
+  /// Second sign-in step: the 6-digit code from the authenticator app.
+  static Future<void> completeSignIn(String code) async {
+    await verifyMfaCode(code);
+    await _finishSignIn();
+  }
+
+  static Future<void> _finishSignIn() async {
     try {
       await _claimDevice();
     } catch (e) {
@@ -46,6 +61,60 @@ class Auth {
       rethrow;
     }
     await loadProfile();
+  }
+
+  // ------------------------------------------------- two-step verification
+
+  /// Signed in with the password, but the account requires an authenticator code.
+  static bool get needsMfaCode {
+    final l = _sb.auth.mfa.getAuthenticatorAssuranceLevel();
+    return l.currentLevel == AuthenticatorAssuranceLevels.aal1 &&
+        l.nextLevel == AuthenticatorAssuranceLevels.aal2;
+  }
+
+  /// This session was verified with the authenticator (required for admin rights).
+  static bool get isMfaVerified =>
+      _sb.auth.mfa.getAuthenticatorAssuranceLevel().currentLevel ==
+      AuthenticatorAssuranceLevels.aal2;
+
+  static Future<void> verifyMfaCode(String code) async {
+    final factors = await _sb.auth.mfa.listFactors();
+    if (factors.totp.isEmpty) throw Exception('No authenticator is set up for this account.');
+    try {
+      await _sb.auth.mfa.challengeAndVerify(factorId: factors.totp.first.id, code: code.trim());
+    } on AuthException catch (e) {
+      throw Exception(e.message.toLowerCase().contains('invalid')
+          ? 'Wrong or expired code. Try the newest code.'
+          : e.message);
+    }
+  }
+
+  /// Starts linking an authenticator app. Returns the otpauth:// link (shown
+  /// as a QR code) and the secret for manual entry.
+  static Future<({String factorId, String uri, String secret})> startMfaSetup() async {
+    final factors = await _sb.auth.mfa.listFactors();
+    for (final f in factors.all.where((f) => f.status == FactorStatus.unverified)) {
+      await _sb.auth.mfa.unenroll(f.id); // abandoned earlier attempts
+    }
+    final r = await _sb.auth.mfa.enroll(
+      factorType: FactorType.totp,
+      issuer: 'MobiWA',
+      friendlyName: 'Authenticator ${DateTime.now().millisecondsSinceEpoch}',
+    );
+    final totp = r.totp!;
+    return (factorId: r.id, uri: totp.uri, secret: totp.secret);
+  }
+
+  /// Confirms the authenticator with its first code; the session becomes aal2.
+  static Future<void> finishMfaSetup(String factorId, String code) async {
+    try {
+      await _sb.auth.mfa.challengeAndVerify(factorId: factorId, code: code.trim());
+    } on AuthException catch (e) {
+      throw Exception(e.message.toLowerCase().contains('invalid')
+          ? 'Wrong or expired code. Try the newest code.'
+          : e.message);
+    }
+    Db.revision.value++;
   }
 
   static Future<void> _claimDevice() async {
@@ -150,6 +219,12 @@ class Auth {
   /// account (claiming it if this phone has no token yet, e.g. after an
   /// update from a version without device lock), then load the profile.
   static Future<void> restoreSession() async {
+    // App was closed between the password and the authenticator code.
+    if (needsMfaCode) {
+      signOutReason.value = 'Please sign in again.';
+      await _localSignOut();
+      return;
+    }
     try {
       if (Device.token == null) await _claimDevice();
     } catch (e) {

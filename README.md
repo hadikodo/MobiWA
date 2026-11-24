@@ -1,6 +1,6 @@
 # MobiWA
 
-Turns WhatsApp chats into organised customer lists. **Going live? Read [DEPLOY.md](DEPLOY.md).**
+Turns WhatsApp chats into organised customer lists. **Going live? Read [DEPLOY.md](DEPLOY.md) and [SECURITY.md](SECURITY.md).**
 
 ## Repository
 
@@ -8,7 +8,7 @@ Turns WhatsApp chats into organised customer lists. **Going live? Read [DEPLOY.m
 |---|---|---|
 | `lib/`, `android/`, `web/` | Flutter app (Android + web) | Google Play `com.mobiwa.app` · **app.mobiwa.com** |
 | `landing/` | Marketing site + Privacy / Terms / account deletion (React + Vite) | **mobiwa.com** |
-| `extension/` | MobiWA Connector Chrome extension (web app ↔ WhatsApp Web) | Chrome Web Store |
+| `extension/` | MobiWA Connector browser extension (web app ↔ WhatsApp Web) | Chrome Web Store |
 | `supabase/` | Database migrations + Edge Functions | Supabase (live) |
 | `store/` | Google Play listing texts, declarations, icon + feature graphic | Play Console |
 | `branding/` | Logo SVGs; `python branding/render.py` regenerates every icon | — |

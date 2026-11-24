@@ -317,7 +317,9 @@
 
   // ------------------------------------------------------------ dispatcher
 
-  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    // Only our own background script may give commands.
+    if (sender.id !== chrome.runtime.id || sender.tab || !msg || typeof msg.cmd !== 'string') return false;
     const run = async () => {
       switch (msg.cmd) {
         case 'state':

@@ -21,8 +21,8 @@ export default function DeleteAccount() {
         <h2>Option 2 — without the app</h2>
         <p>
           Send us a request with the form below (choose “Delete my account”) or email{' '}
-          <a href={`mailto:${site.privacyEmail}?subject=Delete my MobiWA account`}>{site.privacyEmail}</a> from the
-          email linked to your organisation, including your <b>username</b>. We may ask you to confirm the request, and
+          <a href={`mailto:${site.privacyEmail}?subject=Delete my MobiWA account`}>{site.privacyEmail}</a> including
+          your <b>username</b>. We may ask you to confirm the request, and
           we complete it within 30 days.
         </p>
 

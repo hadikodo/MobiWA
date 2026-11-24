@@ -31,10 +31,10 @@ Our AI reads each chat you choose and decides: is this a customer? Customers are
 Pick categories, saved contacts or paste a list. Write your message — text, image, video or PDF with a caption — and press Send. MobiWA opens each chat, sends, and moves to the next, with a pause between messages. A STOP button is always on screen.
 
 ALSO
-• Team accounts with an admin dashboard (numbers, customers, messages per user)
-• One account per device, remote sign-out for admins
+• Live progress, adjustable pause between messages, STOP at any time
+• Your account is protected: signed in on one device at a time
 • Works with WhatsApp and WhatsApp Business
-• Web version at app.mobiwa.com (with WhatsApp Web)
+• Also on your computer at app.mobiwa.com — same account, same customers
 
 PRIVACY
 MobiWA only works inside WhatsApp when you start an action. Chat text is sent to our AI only to choose the category and is not stored. You can delete your account and data any time in Settings.

@@ -24,7 +24,7 @@ class Config {
   static const deleteAccountUrl = '$website/delete-account';
   static const supportEmail = 'support@mobiwa.com';
 
-  /// Chrome extension used by the web app to work inside WhatsApp Web.
+  /// How to install the MobiWA Connector extension (needed by the web app).
   static const extensionUrl = '$website/extension';
 
   /// Usernames without "@" are stored in Supabase Auth as

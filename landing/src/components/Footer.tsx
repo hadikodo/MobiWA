@@ -36,7 +36,7 @@ export default function Footer() {
                 <a href={site.appUrl}>Web app</a>
               </li>
               <li>
-                <Link to="/extension">Chrome extension</Link>
+                <Link to="/extension">Browser extension</Link>
               </li>
             </ul>
           </div>

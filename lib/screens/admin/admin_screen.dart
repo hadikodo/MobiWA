@@ -7,6 +7,7 @@ import '../../widgets/common.dart';
 import '../../widgets/live_data.dart';
 import 'activity_chart.dart';
 import 'inbox_tab.dart';
+import 'mfa_setup.dart';
 import 'admin_user_screen.dart';
 import 'user_form.dart';
 
@@ -16,21 +17,24 @@ class AdminScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return DefaultTabController(
+    // Admin rights need a session verified with the authenticator (server-enforced).
+    return MfaGate(
+        child: DefaultTabController(
       length: 3,
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Admin'),
-          bottom: const TabBar(tabs: [Tab(text: 'Dashboard'), Tab(text: 'Users'), Tab(text: 'Inbox')]),
+          bottom:
+              const TabBar(tabs: [Tab(text: 'Dashboard'), Tab(text: 'Users'), Tab(text: 'Inbox')]),
         ),
         body: const TabBarView(children: [_Dashboard(), _Users(), InboxTab()]),
       ),
-    );
+    ));
   }
 }
 
-void openUser(BuildContext context, String userId) => Navigator.of(context)
-    .push(MaterialPageRoute(builder: (_) => AdminUserScreen(userId: userId)));
+void openUser(BuildContext context, String userId) =>
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => AdminUserScreen(userId: userId)));
 
 // ---------------------------------------------------------------- dashboard
 
@@ -162,7 +166,9 @@ class _StatTile extends StatelessWidget {
             const Spacer(),
             Text(value, style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w800)),
             Text(note,
-                maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: muted)),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 12, color: muted)),
           ],
         ),
       ),
@@ -191,7 +197,8 @@ class _UserRow extends StatelessWidget {
           children: [
             Flexible(
               child: Text(p.displayName,
-                  overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w700)),
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w700)),
             ),
             if (p.isAdmin) const _Badge('Admin', AppColors.ai),
             if (!p.active) const _Badge('Disabled', AppColors.danger),
@@ -226,7 +233,8 @@ class _Badge extends StatelessWidget {
           color: color.withValues(alpha: 0.12),
           borderRadius: BorderRadius.circular(6),
         ),
-        child: Text(text, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: color)),
+        child:
+            Text(text, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: color)),
       );
 }
 

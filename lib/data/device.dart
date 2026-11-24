@@ -1,7 +1,9 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../services/native.dart';
+import 'secure_session_storage.dart';
 
 /// This phone's identity for "one account = one device".
 ///
@@ -20,21 +22,34 @@ class Device {
   static String? token;
 
   /// Loads id, name and the saved token, and attaches the token to requests.
+  /// Android keeps the token in Keystore-encrypted storage.
   static Future<void> load() async {
     final info = await Native.deviceInfo();
     id = info.id;
     name = info.name;
-    token = (await SharedPreferences.getInstance()).getString(_tokenKey);
+    final prefs = await SharedPreferences.getInstance();
+    if (kIsWeb) {
+      token = prefs.getString(_tokenKey);
+    } else {
+      token = await SecureValues.read(_tokenKey);
+      // One-time move from the old plain storage.
+      final legacy = prefs.getString(_tokenKey);
+      if (legacy != null) {
+        token ??= legacy;
+        await SecureValues.write(_tokenKey, token);
+        await prefs.remove(_tokenKey);
+      }
+    }
     _apply();
   }
 
   static Future<void> setToken(String? value) async {
     token = value;
-    final prefs = await SharedPreferences.getInstance();
-    if (value == null) {
-      await prefs.remove(_tokenKey);
+    if (kIsWeb) {
+      final prefs = await SharedPreferences.getInstance();
+      value == null ? await prefs.remove(_tokenKey) : await prefs.setString(_tokenKey, value);
     } else {
-      await prefs.setString(_tokenKey, value);
+      await SecureValues.write(_tokenKey, value);
     }
     _apply();
   }

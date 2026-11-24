@@ -52,19 +52,18 @@ export default function Terms() {
           <li>send their own messages, images, videos or documents to selected numbers (“Send Messages”).</li>
         </ul>
         <p>
-          On Android this uses the Accessibility service; on the web it uses the MobiWA Connector extension with
-          WhatsApp Web. Features may change, and we may add, modify or remove features at any time.
+          On Android this uses the Accessibility service; on a computer the web app at app.mobiwa.com uses the MobiWA
+          Connector browser extension with WhatsApp Web. Features may change, and we may add, modify or remove features at any time.
         </p>
 
         <h2 id="accounts">2. Accounts</h2>
         <ul>
-          <li>Accounts are created by an administrator of your organisation or by us. You must give accurate information.</li>
+          <li>Accounts are created by us. You must give accurate information.</li>
           <li>Keep your password confidential. You are responsible for activity under your account.</li>
           <li>
-            An account can be signed in on <b>one device at a time</b>. Signing out frees it for another device;
-            administrators can sign a user out remotely.
+            An account can be signed in on <b>one device at a time</b>. Signing out frees it for another device.
+            We may end a session or suspend an account to protect the account or the Service.
           </li>
-          <li>Administrators can create, edit, disable and delete accounts of their organisation and see their data and statistics.</li>
           <li>You must be at least 18 years old and able to enter a binding contract.</li>
         </ul>
 
@@ -91,7 +90,7 @@ export default function Terms() {
           WhatsApp Business Messaging Policy. WhatsApp may limit, suspend or ban numbers at its sole discretion,
           including for automated or bulk messaging. <b>We are not responsible for any action WhatsApp takes on your
           number or account</b>, and changes made by WhatsApp to its apps may stop features from working until we
-          update the Service. Other third-party services (such as Google Play, Google Chrome, Supabase and Google’s AI)
+          update the Service. Other third-party services (such as Google Play, the Chrome Web Store, Supabase and Google’s AI)
           are governed by their own terms.
         </p>
 
@@ -115,7 +114,7 @@ export default function Terms() {
 
         <h2 id="fees">7. Fees</h2>
         <p>
-          If your organisation has a paid plan, prices, billing and renewal terms are those agreed in your order or
+          If you have a paid plan, prices, billing and renewal terms are those agreed in your order or
           shown at purchase. Fees are non-refundable except where the law requires otherwise. We may change prices
           with at least 30 days’ notice; changes apply from your next billing period.
         </p>

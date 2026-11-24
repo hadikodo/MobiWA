@@ -80,6 +80,9 @@ Deno.serve(async (req) => {
   // One account = one device: only the bound device may use the AI.
   const { data: deviceOk } = await supabase.rpc("device_ok");
   if (deviceOk !== true) return json({ error: "This account is signed in on another device." }, 401);
+  // Per-user quota (protects the AI bill if an account is misused).
+  const { data: quotaOk } = await supabase.rpc("ai_quota_take");
+  if (quotaOk !== true) return json({ error: "AI limit reached for now. Please try again later." }, 429);
 
   const key = Deno.env.get("GEMINI_API_KEY");
   if (!key) return json({ error: "AI is not configured on the server (GEMINI_API_KEY secret missing)." }, 500);

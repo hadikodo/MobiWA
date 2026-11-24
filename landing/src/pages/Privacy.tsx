@@ -61,7 +61,7 @@ export default function Privacy() {
               <tr>
                 <td>Account</td>
                 <td>Username, password (stored hashed), full name, role, business name and description, account status.</td>
-                <td>Your administrator when the account is created; you in Settings.</td>
+                <td>Us, when we create your account; you, in Settings.</td>
               </tr>
               <tr>
                 <td>Device & session</td>
@@ -135,8 +135,12 @@ export default function Privacy() {
           The service only acts inside WhatsApp and WhatsApp Business, only while an action that <b>you</b> started is
           running, and never reads passwords, other apps, or your screen at other times. Data handled this way is used
           only for the features above and is never sold or used for advertising. You can turn the service off at any
-          time in Android Settings → Accessibility. On the web, the MobiWA Connector extension does the same on
-          web.whatsapp.com and has no access to other websites except {site.appUrl}.
+          time in Android Settings → Accessibility.
+        </p>
+        <p>
+          On a computer, the <b>MobiWA Connector</b> browser extension does the same on web.whatsapp.com for the web
+          app. It can only access web.whatsapp.com and {site.appUrl}, acts only when you start an action in the web
+          app, does not store your chats, and can be removed at any time from your browser’s extensions page.
         </p>
 
         <h2 id="contacts">4. Contacts permission (Android)</h2>
@@ -151,7 +155,7 @@ export default function Privacy() {
         <ul>
           <li>To provide the Service: collect numbers, sort them, send your messages, show your categories and dashboards.</li>
           <li>To secure accounts: sign-in, one-device-per-account, abuse and spam prevention.</li>
-          <li>To let your administrator manage users and see usage statistics for their organisation.</li>
+          <li>To manage accounts and provide customer support.</li>
           <li>To answer support and contact requests.</li>
           <li>To fix bugs and improve reliability (using logs and aggregated statistics).</li>
           <li>To comply with legal obligations.</li>
@@ -176,7 +180,7 @@ export default function Privacy() {
           <li><b>Supabase</b> (database, authentication and server functions) — hosts account and customer data.</li>
           <li><b>Google</b> (Gemini API) — processes chat text for AI Sort, as described above.</li>
           <li><b>Our website / web-app hosting provider</b> — serves the website and web app.</li>
-          <li><b>Your organisation’s administrators</b> — can see the accounts, categories, numbers and statistics of their organisation.</li>
+          <li><b>MobiWA staff</b> — only authorised staff can access account data, and only as needed to operate, secure and support the Service.</li>
           <li><b>Authorities</b> — when required by law or to protect rights and safety.</li>
           <li><b>A successor</b> — in a merger or acquisition, under the same protections.</li>
         </ul>
@@ -197,8 +201,8 @@ export default function Privacy() {
         <h2 id="security">9. Security</h2>
         <p>
           Data is encrypted in transit (HTTPS) and at rest by our database provider. Access is restricted by row-level
-          security so each user only reaches their own data, and only from the device signed in to the account. Admin
-          operations run on the server. No system is perfectly secure; please keep your password private.
+          security so each user only reaches their own data, and only from the device signed in to the account.
+          Account management runs on our server. No system is perfectly secure; please keep your password private.
         </p>
 
         <h2 id="rights">10. Your rights & deleting your data</h2>
@@ -216,7 +220,7 @@ export default function Privacy() {
         <h2 id="customers">11. Your customers’ data</h2>
         <p>
           When you use MobiWA, the phone numbers and chats of <b>your</b> customers are processed on your behalf. For
-          that data you (or your organisation) are the controller and we act as your processor. You are responsible
+          that data you are the controller and we act as your processor. You are responsible
           for having a lawful basis to contact them — in particular, only send marketing messages to people who agreed
           to receive them, and honour opt-out requests. See our <Link to="/terms">Terms of Service</Link>.
         </p>

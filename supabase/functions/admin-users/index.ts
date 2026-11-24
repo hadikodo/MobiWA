@@ -15,6 +15,23 @@ const USER_DOMAIN = "users.mobiwa.app";
 const toEmail = (username: string) => (username.includes("@") ? username : `${username}@${USER_DOMAIN}`);
 const USERNAME_RE = /^[a-z0-9._@-]{3,64}$/;
 
+/** At least 10 characters with letters and digits. */
+function passwordProblem(p: string): string | null {
+  if (p.length < 10) return "Password must be at least 10 characters.";
+  if (!/[A-Za-z]/.test(p) || !/\d/.test(p)) return "Password must contain letters and numbers.";
+  return null;
+}
+
+/** Assurance level from the caller's JWT ("aal2" = signed in with a second factor). */
+function aalOf(token: string): string {
+  try {
+    const payload = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+    return JSON.parse(atob(payload + "=".repeat((4 - (payload.length % 4)) % 4))).aal ?? "aal1";
+  } catch {
+    return "aal1";
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "POST only" }, 405);
@@ -36,6 +53,7 @@ Deno.serve(async (req) => {
   if (peek?.action === "delete_self") {
     if (peek.confirm !== "DELETE") return json({ error: "Confirmation missing." }, 400);
     if (me?.role === "admin") {
+      if (aalOf(token) !== "aal2") return json({ error: "Verify with your authenticator code first." }, 403);
       const { count } = await admin.from("profiles").select("id", { count: "exact", head: true })
         .eq("role", "admin").eq("active", true);
       if ((count ?? 0) <= 1) {
@@ -49,6 +67,10 @@ Deno.serve(async (req) => {
   }
 
   if (me?.role !== "admin" || !me.active) return json({ error: "Admins only." }, 403);
+  // Admin actions need a session verified with the second factor (TOTP).
+  if (aalOf(token) !== "aal2") {
+    return json({ error: "Two-step verification required for admin actions." }, 403);
+  }
 
   let body: Record<string, unknown>;
   try {
@@ -68,7 +90,8 @@ Deno.serve(async (req) => {
         if (!USERNAME_RE.test(username)) {
           return json({ error: "Username: 3-64 characters, letters, numbers, dot, dash or underscore." }, 400);
         }
-        if (password.length < 8) return json({ error: "Password must be at least 8 characters." }, 400);
+        const pwErr = passwordProblem(password);
+        if (pwErr) return json({ error: pwErr }, 400);
 
         const { data, error } = await admin.auth.admin.createUser({
           email: toEmail(username),
@@ -107,7 +130,8 @@ Deno.serve(async (req) => {
           authChanges.user_metadata = { username };
         }
         if (typeof body.password === "string" && body.password.length > 0) {
-          if (body.password.length < 8) return json({ error: "Password must be at least 8 characters." }, 400);
+          const pwErr = passwordProblem(body.password);
+          if (pwErr) return json({ error: pwErr }, 400);
           authChanges.password = body.password;
         }
         if (typeof body.active === "boolean") {

@@ -31,12 +31,7 @@
 </head>
 <body>
   <div id="splash"><img src="icons/Icon-192.png" alt="MobiWA"><span>Loading MobiWA…</span></div>
-  <script>
-    // Remove the splash once Flutter has rendered its first frame.
-    window.addEventListener('flutter-first-frame', function () {
-      var s = document.getElementById('splash'); if (s) s.remove();
-    });
-  </script>
+  <script src="splash.js"></script>
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>

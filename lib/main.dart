@@ -11,6 +11,7 @@ import 'core/theme.dart';
 import 'data/auth.dart';
 import 'data/device.dart';
 import 'data/models.dart';
+import 'data/secure_session_storage.dart';
 import 'screens/admin/admin_screen.dart';
 import 'screens/contacts_screen.dart';
 import 'screens/home_screen.dart';
@@ -33,7 +34,14 @@ Future<void> main() async {
     return true; // handled: keep the app running
   };
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
-  await Supabase.initialize(url: Config.supabaseUrl, publishableKey: Config.supabaseKey);
+  await Supabase.initialize(
+    url: Config.supabaseUrl,
+    publishableKey: Config.supabaseKey,
+    // Android: session in Keystore-encrypted storage. Web: browser storage.
+    authOptions: const FlutterAuthClientOptions(
+      localStorage: kIsWeb ? null : SecureSessionStorage(),
+    ),
+  );
   Native.init();
   await Device.load(); // this phone's id + saved session token (sent with every request)
   runApp(const MobiWAApp());

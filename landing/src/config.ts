@@ -11,7 +11,7 @@ export const site = {
   url: 'https://mobiwa.com',
   appUrl: 'https://app.mobiwa.com',
   playStoreUrl: 'https://play.google.com/store/apps/details?id=com.mobiwa.app',
-  /** Set once the extension is published on the Chrome Web Store. */
+  /** MobiWA Connector on the Chrome Web Store — set once it is published. */
   chromeExtensionUrl: '',
   supportEmail: 'support@mobiwa.com',
   privacyEmail: 'privacy@mobiwa.com',
